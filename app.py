@@ -176,6 +176,9 @@ if __name__ == '__main__':
     # Initialize model on startup
     initialize_model()
     
+    # Check if debug mode should be enabled (via environment variable)
+    debug_mode = os.environ.get('FLASK_DEBUG', 'False').lower() == 'true'
+    
     # Run server
     print("\n" + "="*60)
     print("🚀 Vision AI Agent Server Starting")
@@ -183,6 +186,10 @@ if __name__ == '__main__':
     print("📸 Vision Model: Florence-2")
     print("🔒 Local Secure Server")
     print("🌐 Access at: http://localhost:5000")
+    if debug_mode:
+        print("⚠️  Debug mode: ENABLED (for development only)")
     print("="*60 + "\n")
     
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    # Debug mode disabled by default for security
+    # Set environment variable FLASK_DEBUG=true to enable in development
+    app.run(host='0.0.0.0', port=5000, debug=debug_mode)
