@@ -134,11 +134,13 @@ python app.py
 
 - Flask 3.0.0 - Web framework
 - flask-cors 4.0.0 - CORS support
-- transformers 4.36.0 - Hugging Face transformers
-- torch 2.1.0 - PyTorch deep learning framework
-- pillow 10.1.0 - Image processing
+- transformers 4.48.0 - Hugging Face transformers (security patched)
+- torch 2.6.0 - PyTorch deep learning framework (security patched)
+- pillow 10.3.0 - Image processing (security patched)
 - einops 0.7.0 - Tensor operations
 - timm 0.9.12 - Image models
+
+**Note:** All dependencies use security-patched versions to address known vulnerabilities.
 
 ## 🤝 Contributing
 
