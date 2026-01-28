@@ -151,8 +151,14 @@ model_name = "microsoft/Florence-2-base"   # Default
 app.run(
     host='0.0.0.0',  # Listen on all interfaces
     port=5000,       # Port number
-    debug=True       # Debug mode (disable in production)
+    debug=debug_mode # Debug mode controlled by FLASK_DEBUG env var
 )
+```
+
+To enable debug mode in development:
+```bash
+export FLASK_DEBUG=true
+python app.py
 ```
 
 ### Device Selection
@@ -163,11 +169,13 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 ## Security Considerations
 
-1. **Local Server Only**: Designed to run locally for privacy
-2. **CORS Enabled**: For local development
-3. **No Authentication**: Not meant for public deployment without adding auth
-4. **File Size Limits**: Consider adding limits for uploaded images
-5. **Input Validation**: Basic validation on image data
+1. **Debug Mode Disabled**: Debug mode is disabled by default for security
+   - Enable only in development with `FLASK_DEBUG=true` environment variable
+2. **Local Server Only**: Designed to run locally for privacy
+3. **CORS Enabled**: For local development
+4. **No Authentication**: Not meant for public deployment without adding auth
+5. **File Size Limits**: Consider adding limits for uploaded images
+6. **Input Validation**: Basic validation on image data
 
 ## Performance Tips
 

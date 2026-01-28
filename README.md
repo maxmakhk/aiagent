@@ -114,8 +114,21 @@ model_name = "microsoft/Florence-2-large"  # or Florence-2-large-ft
 Modify host and port in `app.py`:
 
 ```python
-app.run(host='0.0.0.0', port=5000, debug=True)
+app.run(host='0.0.0.0', port=5000, debug=False)  # Debug disabled by default
 ```
+
+**Enable debug mode in development:**
+```bash
+export FLASK_DEBUG=true
+python app.py
+```
+
+### Security
+
+- 🔒 **Debug mode disabled by default** for security
+- 🏠 **Local processing only** - no external API calls
+- 🔐 **No data collection** - complete privacy
+- 📸 **Camera access** requires user permission
 
 ## 📦 Dependencies
 
