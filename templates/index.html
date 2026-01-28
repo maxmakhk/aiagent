@@ -261,18 +261,45 @@
             margin-right: 10px;
         }
 
+        .result-box {
+            background: linear-gradient(135deg, #e8f4f8 0%, #f0f8fc 100%);
+            padding: 24px;
+            border-radius: 12px;
+            border-left: 5px solid #3498db;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 8px rgba(52, 152, 219, 0.1);
+        }
+
+        .result-box-label {
+            font-size: 12px;
+            color: #7f8c8d;
+            margin-bottom: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .result-box-value {
+            font-size: 18px;
+            font-weight: 700;
+            color: #2c3e50;
+            line-height: 1.8;
+            word-break: break-word;
+        }
+
         .result-content {
             white-space: pre-wrap;
             word-wrap: break-word;
             font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
-            font-size: 12px;
+            font-size: 14px;
             background: #f8f9fa;
-            padding: 20px;
+            padding: 24px;
             border-radius: 12px;
             border: 1px solid #dee2e6;
-            max-height: 500px;
+            max-height: 700px;
             overflow-y: auto;
             color: #2c3e50;
+            line-height: 1.6;
         }
 
         @keyframes fadeIn {
@@ -389,6 +416,7 @@
                 <span>Analysis Result</span>
             </div>
             <div id="resultSummary" class="result-summary"></div>
+            <div id="resultBox"></div>
             <div class="result-content" id="resultContent"></div>
         </div>
     </div>
@@ -410,6 +438,7 @@
         const result = document.getElementById('result');
         const resultContent = document.getElementById('resultContent');
         const resultSummary = document.getElementById('resultSummary');
+        const resultBox = document.getElementById('resultBox');
 
         let stream = null;
         let capturedBlob = null;
@@ -428,6 +457,8 @@
                 video.style.display = 'block';
                 captureBtn.style.display = 'block';
                 preview.style.display = 'none';
+                // Scroll to video so user can see the capture button
+                video.scrollIntoView({ behavior: 'smooth', block: 'start' });
             } catch (error) {
                 alert('Cannot access camera: ' + error.message);
             }
@@ -525,7 +556,18 @@
                         resultSummary.style.display = 'none';
                     }
                     
-                    resultContent.textContent = JSON.stringify(data, null, 2);
+                    // Display result value prominently if it exists
+                    let resultHtml = '';
+                    if (data.result) {
+                        resultHtml = `<div class="result-box">
+                            <div class="result-box-label">Result:</div>
+                            <div class="result-box-value">${data.result}</div>
+                        </div>`;
+                    }
+                    
+                    resultBox.innerHTML = resultHtml;
+                    resultContent.innerHTML = '<div style="font-size: 12px; color: #7f8c8d; margin-bottom: 8px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px;">Full Response:</div>' + 
+                                            '<pre style="margin: 0;">' + JSON.stringify(data, null, 2) + '</pre>';
                     resultContent.style.color = '#2c3e50';
                 } else {
                     resultSummary.style.display = 'none';
