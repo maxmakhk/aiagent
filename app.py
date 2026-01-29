@@ -14,6 +14,7 @@ import base64
 import os
 
 app = Flask(__name__)
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16 MB max upload size
 CORS(app)
 
 # Global variables for model and processor
