@@ -372,6 +372,15 @@
                     currentImageData = e.target.result;
                     document.getElementById('analyzeBtn').disabled = false;
                 };
+                reader.onerror = function(e) {
+                    console.error('Error reading file:', e.target.error);
+                    alert('Error reading the selected file. Please choose a different file and try again.');
+                    const previewImage = document.getElementById('previewImage');
+                    previewImage.style.display = 'none';
+                    previewImage.src = '';
+                    currentImageData = null;
+                    document.getElementById('analyzeBtn').disabled = true;
+                };
                 reader.readAsDataURL(file);
             }
         }
