@@ -405,6 +405,55 @@
             </button>
         </form>
 
+        <div style="margin-top: 40px; padding-top: 30px; border-top: 2px solid #f0f0f0;">
+            <h2 style="color: #2c3e50; font-size: 22px; font-weight: 700; margin-bottom: 20px; display: flex; align-items: center; gap: 8px;">
+                <span>🔗</span>
+                <span>Fetch from ESP32 & Analyze(Coming Soon)</span>
+            </h2>
+            
+            <form id="esp32AnalyzeForm">
+                <div class="form-group">
+                    <label for="esp32Url">🖥️ ESP32 Camera URL</label>
+                    <input type="text" id="esp32Url" placeholder="http://192.168.1.100:8080" value="">
+                </div>
+
+                <div class="form-group">
+                    <label for="esp32ImageEndpoint">📸 Image Endpoint</label>
+                    <input type="text" id="esp32ImageEndpoint" placeholder="/capture or /image.jpg" value="/capture">
+                </div>
+
+                <div class="form-group">
+                    <label for="analysisMode">🎯 Analysis Mode</label>
+                    <select id="analysisMode">
+                        <option value="analyze">Standard Analysis</option>
+                        <option value="analyze_json">JSON Mode (Gauges)</option>
+                        <option value="analyze_json_monitor">JSON + Health Check</option>
+                        <option value="verify">Quick Verify</option>
+                    </select>
+                </div>
+
+                <div class="form-group" id="analysisTaskGroup">
+                    <label for="analysisTask">📋 Task Type</label>
+                    <select id="analysisTask">
+                        <option value="&lt;MORE_DETAILED_CAPTION&gt;">Detailed Caption</option>
+                        <option value="&lt;CAPTION&gt;">Simple Caption</option>
+                        <option value="&lt;OBJECT_DETECTION&gt;">Object Detection</option>
+                        <option value="&lt;OCR_WITH_REGION&gt;">OCR with Regions</option>
+                    </select>
+                </div>
+
+                <div class="form-group" id="analysisTargetGroup" style="display:none;">
+                    <label for="analysisTarget">🎯 Target Object</label>
+                    <input type="text" id="analysisTarget" placeholder="e.g., gauge, pressure, temperature" value="">
+                </div>
+
+                <button type="submit" class="btn-submit" style="background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);">
+                    <span>🔍</span>
+                    <span>Fetch & Analyze</span>
+                </button>
+            </form>
+        </div>
+
         <div id="loading" class="loading">
             <div class="spinner"></div>
             <div class="loading-text">⏳ Analyzing image... Please wait</div>
@@ -630,6 +679,188 @@
             `;
             summary.style.display = 'block';
         }
+
+        // Remote ESP32 Check Form Handler
+        const remoteCheckForm = document.getElementById('remoteCheckForm');
+        const remoteUrl = document.getElementById('remoteUrl');
+        const checkEndpoint = document.getElementById('checkEndpoint');
+        const imageUrl = document.getElementById('imageUrl');
+
+        remoteCheckForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            if (!remoteUrl.value.trim()) {
+                alert('Please enter the remote ESP32 URL');
+                return;
+            }
+
+            const submitBtn = remoteCheckForm.querySelector('button[type="submit"]');
+            submitBtn.disabled = true;
+            loading.style.display = 'block';
+            result.style.display = 'none';
+
+            try {
+                const postUrl = `${remoteUrl.value.trim()}${checkEndpoint.value.trim()}`;
+                const payload = {};
+                
+                if (imageUrl.value.trim()) {
+                    payload.image_url = imageUrl.value.trim();
+                }
+
+                const response = await fetch(postUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(payload)
+                });
+
+                const data = await response.json();
+
+                loading.style.display = 'none';
+                result.style.display = 'block';
+                resultSummary.style.display = 'none';
+
+                // Display the image details result
+                let resultHtml = '';
+                if (data.result) {
+                    resultHtml = `<div class="result-box">
+                        <div class="result-box-label">Image Details:</div>
+                        <div class="result-box-value">${typeof data.result === 'string' ? data.result : JSON.stringify(data.result, null, 2)}</div>
+                    </div>`;
+                }
+                
+                resultBox.innerHTML = resultHtml;
+                resultContent.innerHTML = '<div style="font-size: 12px; color: #7f8c8d; margin-bottom: 8px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px;">Full Response:</div>' + 
+                                        '<pre style="margin: 0;">' + JSON.stringify(data, null, 2) + '</pre>';
+                resultContent.style.color = '#2c3e50';
+
+            } catch (error) {
+                loading.style.display = 'none';
+                result.style.display = 'block';
+                resultSummary.style.display = 'none';
+                resultContent.textContent = `Error: ${error.message}`;
+                resultContent.style.color = '#e74c3c';
+            } finally {
+                submitBtn.disabled = false;
+            }
+        });
+
+        // ESP32 Fetch & Analyze Form Handler
+        const esp32AnalyzeForm = document.getElementById('esp32AnalyzeForm');
+        const esp32Url = document.getElementById('esp32Url');
+        const esp32ImageEndpoint = document.getElementById('esp32ImageEndpoint');
+        const analysisMode = document.getElementById('analysisMode');
+        const analysisTaskGroup = document.getElementById('analysisTaskGroup');
+        const analysisTargetGroup = document.getElementById('analysisTargetGroup');
+
+        analysisMode.addEventListener('change', (e) => {
+            if (e.target.value === 'verify') {
+                analysisTaskGroup.style.display = 'none';
+                analysisTargetGroup.style.display = 'block';
+            } else if (e.target.value === 'analyze') {
+                analysisTaskGroup.style.display = 'block';
+                analysisTargetGroup.style.display = 'none';
+            } else {
+                analysisTaskGroup.style.display = 'none';
+                analysisTargetGroup.style.display = 'none';
+            }
+        });
+
+        esp32AnalyzeForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            if (!esp32Url.value.trim()) {
+                alert('Please enter the ESP32 URL');
+                return;
+            }
+
+            const submitBtn = esp32AnalyzeForm.querySelector('button[type="submit"]');
+            submitBtn.disabled = true;
+            loading.style.display = 'block';
+            result.style.display = 'none';
+
+            try {
+                // Step 1: Fetch image from ESP32
+                const imageUrl = `${esp32Url.value.trim()}${esp32ImageEndpoint.value.trim()}`;
+                console.log(`Fetching image from: ${imageUrl}`);
+                
+                const imageResponse = await fetch(imageUrl);
+                if (!imageResponse.ok) {
+                    throw new Error(`Failed to fetch image from ESP32: ${imageResponse.statusText}`);
+                }
+
+                const imageBlob = await imageResponse.blob();
+                console.log(`Image fetched, size: ${imageBlob.size} bytes`);
+
+                // Step 2: Send image to Flask server (aiagent.py)
+                const formData = new FormData();
+                formData.append('image', imageBlob, 'esp32_capture.jpg');
+
+                const selectedMode = analysisMode.value;
+                let flaskEndpoint = `/${selectedMode}`;
+
+                if (selectedMode === 'analyze') {
+                    formData.append('task', document.getElementById('analysisTask').value);
+                } else if (selectedMode === 'verify') {
+                    formData.append('target', document.getElementById('analysisTarget').value);
+                }
+
+                console.log(`Sending to Flask: ${flaskEndpoint}`);
+                const analysisResponse = await fetch(flaskEndpoint, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const analysisData = await analysisResponse.json();
+
+                loading.style.display = 'none';
+                result.style.display = 'block';
+
+                if (analysisData.success) {
+                    if (analysisData.health_check) {
+                        displaySummary(analysisData.health_check);
+                    } else {
+                        resultSummary.style.display = 'none';
+                    }
+                    
+                    // Display result value prominently
+                    let resultHtml = '';
+                    if (analysisData.result) {
+                        resultHtml = `<div class="result-box">
+                            <div class="result-box-label">Result:</div>
+                            <div class="result-box-value">${analysisData.result}</div>
+                        </div>`;
+                    } else if (analysisData.data && Array.isArray(analysisData.data)) {
+                        // For JSON mode, show gauge data
+                        resultHtml = `<div class="result-box">
+                            <div class="result-box-label">Detected Values:</div>
+                            <div class="result-box-value">`;
+                        analysisData.data.forEach(item => {
+                            resultHtml += `${item.type}: ${item.value}<br>`;
+                        });
+                        resultHtml += `</div></div>`;
+                    }
+                    
+                    resultBox.innerHTML = resultHtml;
+                    resultContent.innerHTML = '<div style="font-size: 12px; color: #7f8c8d; margin-bottom: 8px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px;">Full Response:</div>' + 
+                                            '<pre style="margin: 0;">' + JSON.stringify(analysisData, null, 2) + '</pre>';
+                    resultContent.style.color = '#2c3e50';
+                } else {
+                    resultSummary.style.display = 'none';
+                    resultContent.textContent = `Error: ${analysisData.error}`;
+                    resultContent.style.color = '#e74c3c';
+                }
+            } catch (error) {
+                loading.style.display = 'none';
+                result.style.display = 'block';
+                resultSummary.style.display = 'none';
+                resultContent.textContent = `Error: ${error.message}`;
+                resultContent.style.color = '#e74c3c';
+            } finally {
+                submitBtn.disabled = false;
+            }
+        });
     </script>
 </body>
 </html>
