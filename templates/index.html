@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Vision AI Agent</title>
+    <title>Vision AI Agent v2</title>
     <style>
         * {
             margin: 0;
@@ -13,7 +13,7 @@
 
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: #f8f8f8;
             min-height: 100vh;
             padding: 20px;
             display: flex;
@@ -22,23 +22,24 @@
         }
 
         .container {
-            background: white;
+            background: #ffffff;
             max-width: 900px;
             width: 100%;
             padding: 40px;
-            border-radius: 20px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            border: 1px solid #e8e8e8;
         }
 
         header {
             text-align: center;
             margin-bottom: 40px;
             padding-bottom: 30px;
-            border-bottom: 2px solid #f0f0f0;
+            border-bottom: 1px solid #e8e8e8;
         }
 
         h1 {
-            color: #2c3e50;
+            color: #000000;
             font-size: 32px;
             font-weight: 700;
             margin-bottom: 12px;
@@ -46,18 +47,20 @@
             align-items: center;
             justify-content: center;
             gap: 12px;
+            letter-spacing: -0.5px;
         }
 
         .subtitle {
-            color: #7f8c8d;
-            font-size: 15px;
+            color: #666666;
+            font-size: 14px;
             line-height: 1.6;
+            font-weight: 400;
         }
 
         .badge-container {
             display: flex;
             justify-content: center;
-            gap: 12px;
+            gap: 10px;
             margin-top: 15px;
             flex-wrap: wrap;
         }
@@ -67,10 +70,11 @@
             align-items: center;
             gap: 6px;
             padding: 6px 14px;
-            background: #f8f9fa;
-            border-radius: 20px;
-            font-size: 13px;
-            color: #495057;
+            background: #f5f5f5;
+            border: 1px solid #d9d9d9;
+            border-radius: 4px;
+            font-size: 12px;
+            color: #666666;
             font-weight: 500;
         }
 
@@ -82,8 +86,10 @@
             display: block;
             margin-bottom: 10px;
             font-weight: 600;
-            color: #34495e;
-            font-size: 14px;
+            color: #1a1a1a;
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
 
         .btn-group {
@@ -94,72 +100,92 @@
         }
 
         button {
-            background: #3498db;
+            background: #d32f2f;
             color: white;
-            padding: 14px 24px;
+            padding: 12px 24px;
             border: none;
-            border-radius: 8px;
+            border-radius: 4px;
             cursor: pointer;
-            font-size: 15px;
+            font-size: 14px;
             font-weight: 600;
             transition: all 0.3s ease;
             display: flex;
             align-items: center;
             justify-content: center;
             gap: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
 
         button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            background: #b71c1c;
+            box-shadow: 0 4px 12px rgba(211, 47, 47, 0.3);
         }
 
         button:active {
-            transform: translateY(0);
+            transform: translateY(1px);
         }
 
         button:disabled {
-            background: #bdc3c7;
+            background: #cccccc;
             cursor: not-allowed;
             transform: none;
+            box-shadow: none;
         }
 
         .btn-upload {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: #414141;
+        }
+
+        .btn-upload:hover {
+            background: #b71c1c;
         }
 
         .btn-camera {
-            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            background: #414141;
+        }
+
+        .btn-camera:hover {
+            background: #b71c1c;
         }
 
         .btn-capture {
-            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            background: #414141;
             width: 100%;
             margin-top: 10px;
         }
 
+        .btn-capture:hover {
+            background: #b71c1c;
+        }
+
         .btn-submit {
-            background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
+            background: #414141;
             width: 100%;
-            font-size: 16px;
-            padding: 16px;
+            font-size: 14px;
+            padding: 14px;
             margin-top: 10px;
+        }
+
+        .btn-submit:hover {
+            background: #b71c1c;
         }
 
         select, input[type="text"] {
             width: 100%;
-            padding: 12px 16px;
-            border: 2px solid #e0e0e0;
-            border-radius: 8px;
+            padding: 12px 14px;
+            border: 1px solid #d9d9d9;
+            border-radius: 4px;
             font-size: 14px;
-            transition: border-color 0.3s;
+            transition: border-color 0.3s, box-shadow 0.3s;
             background: white;
-            color: #2c3e50;
+            color: #1a1a1a;
         }
 
         select:focus, input[type="text"]:focus {
             outline: none;
-            border-color: #3498db;
+            border-color: #d32f2f;
+            box-shadow: 0 0 0 3px rgba(211, 47, 47, 0.08);
         }
 
         #preview {
@@ -186,8 +212,8 @@
         }
 
         .spinner {
-            border: 4px solid #f3f3f3;
-            border-top: 4px solid #3498db;
+            border: 4px solid #f0f0f0;
+            border-top: 4px solid #d32f2f;
             border-radius: 50%;
             width: 50px;
             height: 50px;
@@ -201,8 +227,8 @@
         }
 
         .loading-text {
-            color: #7f8c8d;
-            font-size: 16px;
+            color: #333333;
+            font-size: 14px;
         }
 
         #result {
@@ -213,66 +239,69 @@
 
         .result-title {
             font-weight: 700;
-            color: #2c3e50;
+            color: #000000;
             margin-bottom: 20px;
-            font-size: 20px;
+            font-size: 18px;
             display: flex;
             align-items: center;
             gap: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
 
         .result-summary {
-            padding: 20px 24px;
+            padding: 16px 20px;
             margin-bottom: 20px;
-            border-radius: 12px;
-            font-size: 18px;
+            border-radius: 4px;
+            font-size: 16px;
             font-weight: 600;
             text-align: center;
             display: none;
             animation: slideIn 0.4s ease;
+            border-left: 4px solid;
         }
 
         .result-summary.healthy {
-            background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%);
-            color: #155724;
-            border: 2px solid #28a745;
+            background: #f1f8e9;
+            color: #33691e;
+            border-left-color: #558b2f;
         }
 
         .result-summary.warning {
-            background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%);
-            color: #856404;
-            border: 2px solid #ffc107;
+            background: #fff8e1;
+            color: #f57f17;
+            border-left-color: #f9a825;
         }
 
         .result-summary.error {
-            background: linear-gradient(135deg, #f8d7da 0%, #f5c6cb 100%);
-            color: #721c24;
-            border: 2px solid #dc3545;
+            background: #ffebee;
+            color: #c62828;
+            border-left-color: #d32f2f;
         }
 
         .result-summary.unknown {
-            background: linear-gradient(135deg, #e2e3e5 0%, #d6d8db 100%);
-            color: #383d41;
-            border: 2px solid #6c757d;
+            background: #f5f5f5;
+            color: #424242;
+            border-left-color: #757575;
         }
 
         .summary-icon {
-            font-size: 28px;
-            margin-right: 10px;
+            font-size: 24px;
+            margin-right: 8px;
         }
 
         .result-box {
-            background: linear-gradient(135deg, #e8f4f8 0%, #f0f8fc 100%);
-            padding: 24px;
-            border-radius: 12px;
-            border-left: 5px solid #3498db;
+            background: #fafafa;
+            padding: 16px;
+            border-radius: 4px;
+            border-left: 3px solid #d32f2f;
             margin-bottom: 20px;
-            box-shadow: 0 2px 8px rgba(52, 152, 219, 0.1);
+            box-shadow: 0 1px 3px rgba(0,0,0,0.04);
         }
 
         .result-box-label {
-            font-size: 12px;
-            color: #7f8c8d;
+            font-size: 11px;
+            color: #999999;
             margin-bottom: 12px;
             font-weight: 600;
             text-transform: uppercase;
@@ -280,10 +309,10 @@
         }
 
         .result-box-value {
-            font-size: 18px;
-            font-weight: 700;
-            color: #2c3e50;
-            line-height: 1.8;
+            font-size: 15px;
+            font-weight: 600;
+            color: #1a1a1a;
+            line-height: 1.6;
             word-break: break-word;
         }
 
@@ -291,15 +320,15 @@
             white-space: pre-wrap;
             word-wrap: break-word;
             font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
-            font-size: 14px;
-            background: #f8f9fa;
-            padding: 24px;
-            border-radius: 12px;
-            border: 1px solid #dee2e6;
+            font-size: 12px;
+            background: #f9f9f9;
+            padding: 16px;
+            border-radius: 4px;
+            border: 1px solid #e8e8e8;
             max-height: 700px;
             overflow-y: auto;
-            color: #2c3e50;
-            line-height: 1.6;
+            color: #333333;
+            line-height: 1.5;
         }
 
         @keyframes fadeIn {
@@ -318,6 +347,142 @@
             }
         }
 
+        /* Video Mode Toggle */
+        .mode-toggle-container {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 25px;
+            justify-content: center;
+        }
+
+        .mode-toggle-btn {
+            flex: 1;
+            padding: 12px 24px;
+            border: 1px solid #d9d9d9;
+            background: white;
+            color: #666666;
+            border-radius: 4px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .mode-toggle-btn:hover {
+            border-color: #d32f2f;
+            color: #d32f2f;
+        }
+
+        .mode-toggle-btn.active {
+            background: #414141;
+            color: white;
+            border-color: #d32f2f;
+        }
+
+        /* Video Mode Container */
+        .video-mode-container {
+            display: none;
+            margin-top: 25px;
+        }
+
+        .video-overlay-wrapper {
+            position: relative;
+            width: 100%;
+            margin-top: 15px;
+            margin-bottom: 15px;
+            border-radius: 4px;
+            overflow: hidden;
+            background: #000;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+            border: 1px solid #e8e8e8;
+        }
+
+        #videoPreview {
+            display: block;
+            width: 100%;
+            height: auto;
+            background: #000;
+        }
+
+        #videoCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+
+        .video-status-label {
+            padding: 12px 14px;
+            background: #f5f5f5;
+            border-radius: 4px;
+            font-size: 12px;
+            color: #666666;
+            margin-bottom: 15px;
+            border-left: 3px solid #d32f2f;
+            font-weight: 500;
+            word-break: break-word;
+            font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+        }
+
+        /* Video Control Buttons Grid */
+        .video-controls {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin-top: 15px;
+        }
+
+        .video-btn {
+            background: #414141;
+            color: white;
+            padding: 12px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .video-btn:hover:not(:disabled) {
+            background: #b71c1c;
+            box-shadow: 0 2px 8px rgba(211, 47, 47, 0.2);
+        }
+
+        .video-btn:active:not(:disabled) {
+            transform: translateY(1px);
+        }
+
+        .video-btn:disabled {
+            background: #cccccc;
+            cursor: not-allowed;
+        }
+
+        .video-btn.start-camera {
+            background: #414141;
+        }
+
+        .video-btn.stop-camera {
+            background: #666666;
+        }
+
+        .video-btn.start-detection {
+            background: #414141;
+        }
+
+        .video-btn.stop-detection {
+            background: #666666;
+        }
+
         @media (max-width: 768px) {
             .container {
                 padding: 24px;
@@ -328,6 +493,14 @@
             }
 
             .btn-group {
+                grid-template-columns: 1fr;
+            }
+
+            .mode-toggle-container {
+                flex-direction: column;
+            }
+
+            .video-controls {
                 grid-template-columns: 1fr;
             }
         }
@@ -347,65 +520,107 @@
                 <span class="badge">Self-Modifiable</span>
                 <span class="badge">Local Secure Server</span>
                 <span class="badge">Vision Model: Florence-2 </span>
-                
             </div>
         </header>
+
+        <!-- Mode Toggle -->
+        <div class="mode-toggle-container">
+            <button type="button" class="mode-toggle-btn active" id="imageModeBtn" data-mode="image">
+                Image Mode
+            </button>
+            <button type="button" class="mode-toggle-btn" id="videoModeBtn" data-mode="video">
+                Video Hands Detection
+            </button>
+        </div>
         
         <form id="analysisForm">
-            <div class="form-group">
-                <label>📸 Image Source</label>
+            <div class="form-group image-mode-controls">
+                <label>Image Source</label>
                 <div class="btn-group">
                     <button type="button" id="uploadBtn" class="btn-upload">
-                        <span>📂</span>
                         <span>Upload File</span>
                     </button>
                     <button type="button" id="cameraBtn" class="btn-camera">
-                        <span>📷</span>
                         <span>Take Photo</span>
                     </button>
                 </div>
                 <input type="file" id="imageFile" accept="image/*" style="display:none;">
                 <video id="video" autoplay></video>
                 <button type="button" id="captureBtn" class="btn-capture" style="display:none;">
-                    <span>📸</span>
                     <span>Capture Photo</span>
                 </button>
                 <canvas id="canvas" style="display:none;"></canvas>
                 <img id="preview" alt="Image Preview">
+                
+                <div id="resultImage"></div>
             </div>
 
-            <div class="form-group">
-                <label for="mode">🎯 Analysis Mode</label>
-                <select id="mode">
-                    <option value="analyze">Standard Analysis</option>
-                    <option value="analyze_json">JSON Mode (General)</option>
-                    <option value="analyze_json_monitor">JSON Mode + Health Check (Monitor)</option>
-                    <option value="verify">Quick Verify (Quest Builder)</option>
-                </select>
+            <div class="image-mode-controls">
+                <div class="form-group">
+                    <label for="mode">Analysis Mode</label>
+                    <select id="mode">
+                        <option value="analyze">Standard Analysis</option>
+                        <option value="analyze_json">JSON Mode (General)</option>
+                        <option value="analyze_json_monitor">JSON Mode + Health Check (Monitor)</option>
+                        <option value="verify">Quick Verify (Quest Builder)</option>
+                    </select>
+                </div>
+
+                <div class="form-group" id="taskGroup">
+                    <label for="task">Task Type</label>
+                    <select id="task">
+                        <option value="<MORE_DETAILED_CAPTION>">Detailed Caption</option>
+                        <option value="<CAPTION>">Simple Caption</option>
+                        <option value="<OBJECT_DETECTION>">Object Detection</option>
+                        <option value="<OCR_WITH_REGION>">OCR with Regions</option>
+                    </select>
+                </div>
+
+                <div class="form-group" id="targetGroup" style="display:none;">
+                    <label for="target">Target Object</label>
+                    <input type="text" id="target" placeholder="e.g., chair, table, person" value="chair">
+                </div>
+
+                <button type="submit" id="submitBtn" class="btn-submit">
+                    <span>Analyze Image</span>
+                </button>
             </div>
 
-            <div class="form-group" id="taskGroup">
-                <label for="task">📋 Task Type</label>
-                <select id="task">
-                    <option value="<MORE_DETAILED_CAPTION>">Detailed Caption</option>
-                    <option value="<CAPTION>">Simple Caption</option>
-                    <option value="<OBJECT_DETECTION>">Object Detection</option>
-                    <option value="<OCR_WITH_REGION>">OCR with Regions</option>
-                </select>
-            </div>
-
-            <div class="form-group" id="targetGroup" style="display:none;">
-                <label for="target">🎯 Target Object</label>
-                <input type="text" id="target" placeholder="e.g., chair, table, person" value="chair">
-            </div>
-
-            <button type="submit" id="submitBtn" class="btn-submit">
-                <span>🚀</span>
-                <span>Analyze Image</span>
+            <button type="submit" id="handDetectionBtn" class="btn-submit">
+                <span>Hand Detection</span>
             </button>
+
+            <!-- Video Hands Detection Mode -->
+            <div class="video-mode-container" id="videoModeContainer">
+                <div class="form-group">
+                    <label>Live Camera Feed</label>
+                    <div class="video-overlay-wrapper">
+                        <video id="videoPreview" autoplay playsinline></video>
+                        <canvas id="videoCanvas"></canvas>
+                    </div>
+                    <div class="video-status-label" id="videoStatusLabel">
+                        Camera: Ready | Detection: Idle
+                    </div>
+                    <div class="video-controls">
+                        <button type="button" class="video-btn start-camera" id="startCameraBtn">
+                            <span>Start Camera</span>
+                        </button>
+                        <button type="button" class="video-btn stop-camera" id="stopCameraBtn" disabled>
+                            <span>Stop Camera</span>
+                        </button>
+                        <button type="button" class="video-btn start-detection" id="startDetectionBtn" disabled>
+                            <span>Start Detection</span>
+                        </button>
+                        <button type="button" class="video-btn stop-detection" id="stopDetectionBtn" disabled>
+                            <span>Stop Detection</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
         </form>
 
-        <div style="margin-top: 40px; padding-top: 30px; border-top: 2px solid #f0f0f0;">
+        <div style="display:none; margin-top: 40px; padding-top: 30px; border-top: 2px solid #f0f0f0;">
             <h2 style="color: #2c3e50; font-size: 22px; font-weight: 700; margin-bottom: 20px; display: flex; align-items: center; gap: 8px;">
                 <span>🔗</span>
                 <span>Fetch from ESP32 & Analyze(Coming Soon)</span>
@@ -467,6 +682,7 @@
             <div id="resultSummary" class="result-summary"></div>
             <div id="resultBox"></div>
             <div class="result-content" id="resultContent"></div>
+
         </div>
     </div>
 
@@ -491,6 +707,461 @@
 
         let stream = null;
         let capturedBlob = null;
+
+        // Video Mode State Variables
+        let isVideoMode = false;
+        let videoStream = null;
+        let detectionIntervalId = null;
+        let isDetectingFrame = false;
+        let isCameraRunning = false;
+        let lastDetectionResult = null;
+        let lastDetectionTime = null;
+
+        // Get video mode elements
+        const videoPreview = document.getElementById('videoPreview');
+        const videoCanvas = document.getElementById('videoCanvas');
+        const canvasCtx = videoCanvas ? videoCanvas.getContext('2d') : null;
+        const videoStatusLabel = document.getElementById('videoStatusLabel');
+        const videoModeContainer = document.getElementById('videoModeContainer');
+        const imageModeBtn = document.getElementById('imageModeBtn');
+        const videoModeBtn = document.getElementById('videoModeBtn');
+        const startCameraBtn = document.getElementById('startCameraBtn');
+        const stopCameraBtn = document.getElementById('stopCameraBtn');
+        const startDetectionBtn = document.getElementById('startDetectionBtn');
+        const stopDetectionBtn = document.getElementById('stopDetectionBtn');
+        const imageModeCtrls = document.querySelectorAll('.image-mode-controls');
+
+        // Debug: Log if elements were found
+        console.log('UI Elements loaded:', {
+            videoCanvas: !!videoCanvas,
+            videoModeContainer: !!videoModeContainer,
+            imageModeBtn: !!imageModeBtn,
+            videoModeBtn: !!videoModeBtn,
+            imageModeCtrls: imageModeCtrls.length
+        });
+
+        // Helper Functions for Video Mode
+        function switchMode(toVideoMode) {
+            isVideoMode = toVideoMode;
+            
+            if (toVideoMode) {
+                // Switch to video mode
+                videoModeContainer.style.display = 'block';
+                imageModeCtrls.forEach(ctrl => {
+                    ctrl.style.display = 'none';
+                });
+                imageModeBtn.classList.remove('active');
+                videoModeBtn.classList.add('active');
+                stopCamera(); // Stop image mode camera if running
+                logStatus('Camera: Ready | Detection: Idle');
+                console.log('Switched to Video Mode');
+            } else {
+                // Switch to image mode
+                videoModeContainer.style.display = 'none';
+                imageModeCtrls.forEach(ctrl => {
+                    ctrl.style.display = 'block';
+                });
+                imageModeBtn.classList.add('active');
+                videoModeBtn.classList.remove('active');
+                cleanupVideoMode(); // Stop video mode camera and detection
+                console.log('Switched to Image Mode');
+            }
+        }
+
+        function logStatus(message) {
+            if (videoStatusLabel) {
+                videoStatusLabel.textContent = message;
+            }
+            console.log('Status:', message);
+        }
+
+        function cleanupVideoMode() {
+            // Stop detection loop
+            if (detectionIntervalId) {
+                clearInterval(detectionIntervalId);
+                detectionIntervalId = null;
+            }
+            
+            // Stop camera
+            if (videoStream) {
+                videoStream.getTracks().forEach(track => track.stop());
+                videoStream = null;
+            }
+            
+            // Reset UI state
+            isCameraRunning = false;
+            isDetectingFrame = false;
+            startCameraBtn.disabled = false;
+            stopCameraBtn.disabled = true;
+            startDetectionBtn.disabled = true;
+            stopDetectionBtn.disabled = true;
+            
+            // Clear canvas overlay
+            if (canvasCtx && videoCanvas) {
+                canvasCtx.clearRect(0, 0, videoCanvas.width, videoCanvas.height);
+            }
+            logStatus('Camera: Stopped | Detection: Stopped');
+        }
+
+        function startVideoCamera() {
+            if (!videoPreview) {
+                alert('Video element not found');
+                return;
+            }
+            
+            navigator.mediaDevices.getUserMedia({
+                video: { facingMode: { ideal: 'environment' } }
+            }).then(stream => {
+                videoStream = stream;
+                videoPreview.srcObject = stream;
+                isCameraRunning = true;
+                
+                startCameraBtn.disabled = true;
+                stopCameraBtn.disabled = false;
+                startDetectionBtn.disabled = false;
+                
+                logStatus('Camera: Running | Detection: Ready to start');
+            }).catch(error => {
+                alert('Cannot access camera: ' + error.message);
+                logStatus('Camera: Permission Denied');
+            });
+        }
+
+        function stopVideoCamera() {
+            cleanupVideoMode();
+        }
+
+        function startVideoDetection() {
+            if (!isCameraRunning) {
+                alert('Please start the camera first');
+                return;
+            }
+            
+            startDetectionBtn.disabled = true;
+            stopDetectionBtn.disabled = false;
+            logStatus('Camera: Running | Detection: Starting...');
+            
+            // Run detection every 300ms
+            detectionIntervalId = setInterval(captureAndDetect, 300);
+        }
+
+        function stopVideoDetection() {
+            if (detectionIntervalId) {
+                clearInterval(detectionIntervalId);
+                detectionIntervalId = null;
+            }
+            
+            startDetectionBtn.disabled = false;
+            stopDetectionBtn.disabled = true;
+            isDetectingFrame = false;
+            
+            logStatus('Camera: Running | Detection: Stopped');
+        }
+
+        async function captureAndDetect() {
+            // Guard: avoid overlapping requests
+            if (isDetectingFrame) return;
+            
+            try {
+                isDetectingFrame = true;
+                
+                // Capture frame to blob
+                const blob = await captureVideoFrameToBlob(512);
+                
+                if (!blob) {
+                    console.warn('Failed to capture frame');
+                    return;
+                }
+                
+                // Send to server
+                const formData = new FormData();
+                formData.append('image', blob, 'video_frame.jpg');
+                
+                const response = await fetch('/hand_detection', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Server error: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    lastDetectionResult = data;
+                    lastDetectionTime = Date.now();
+                    updateVideoResult(data);
+                    drawOverlay(data);
+                    
+                    // Update status with timestamp
+                    const elapsed = ((Date.now() - lastDetectionTime) / 1000).toFixed(2);
+                    logStatus(`Camera: Running | Detection: Active | Last: ${elapsed}s ago`);
+                }
+            } catch (error) {
+                console.error('Detection error:', error);
+                // Continue trying next frame
+            } finally {
+                isDetectingFrame = false;
+            }
+        }
+
+        async function captureVideoFrameToBlob(maxWidth = 512) {
+            return new Promise((resolve) => {
+                // Wait for video to have dimensions
+                if (videoPreview.videoWidth === 0 || videoPreview.videoHeight === 0) {
+                    console.warn('Video not ready yet');
+                    resolve(null);
+                    return;
+                }
+                
+                // Create offscreen canvas for resizing
+                const offscreenCanvas = document.createElement('canvas');
+                const offscreenCtx = offscreenCanvas.getContext('2d');
+                
+                // Calculate scaled dimensions
+                const videoWidth = videoPreview.videoWidth;
+                const videoHeight = videoPreview.videoHeight;
+                const aspectRatio = videoHeight / videoWidth;
+                const scaledWidth = Math.min(maxWidth, videoWidth);
+                const scaledHeight = Math.round(scaledWidth * aspectRatio);
+                
+                offscreenCanvas.width = scaledWidth;
+                offscreenCanvas.height = scaledHeight;
+                
+                // Draw video frame
+                offscreenCtx.drawImage(videoPreview, 0, 0, scaledWidth, scaledHeight);
+                
+                // Convert to JPEG blob
+                offscreenCanvas.toBlob(
+                    (blob) => resolve(blob),
+                    'image/jpeg',
+                    0.65
+                );
+            });
+        }
+
+        function drawOverlay(detectionResult) {
+            if (!videoCanvas || !canvasCtx) {
+                console.warn('Canvas not available');
+                return;
+            }
+            
+            const videoWidth = videoPreview.videoWidth;
+            const videoHeight = videoPreview.videoHeight;
+            
+            // Match canvas to video dimensions
+            videoCanvas.width = videoWidth;
+            videoCanvas.height = videoHeight;
+            
+            // Clear canvas
+            canvasCtx.clearRect(0, 0, videoWidth, videoHeight);
+            
+            // Check if hands were detected
+            const handsDetected = detectionResult.hands_detected && detectionResult.hands_detected > 0;
+            
+            // Draw detected objects (show ALL for debugging)
+            // Temporarily lowered threshold to see all detections
+            const OBJECT_CONFIDENCE_THRESHOLD = 0.15;  // Very low for debugging
+            if (detectionResult.objects_detected && detectionResult.objects_detected.length > 0) {
+                console.log(`[DEBUG] Objects detected: ${detectionResult.objects_detected.length}, handsDetected: ${handsDetected}`);
+                detectionResult.objects_detected.forEach((obj, idx) => {
+                    console.log(`  [${idx}] confidence: ${(obj.confidence*100).toFixed(1)}%, bbox: [${obj.bbox.join(',')}]`);
+                    if (obj.confidence >= OBJECT_CONFIDENCE_THRESHOLD) {
+                        drawObjectBox(obj, videoWidth, videoHeight, handsDetected);
+                    }
+                });
+            }
+            
+            // Draw hand landmarks on top
+            if (!detectionResult.hand_details || detectionResult.hand_details.length === 0) {
+                return;
+            }
+            
+            // Draw each hand
+            detectionResult.hand_details.forEach(hand => {
+                drawHand(hand, videoWidth, videoHeight);
+            });
+        }
+
+        function drawObjectBox(obj, videoWidth, videoHeight, handsDetected) {
+            // Draw bounding box for detected object
+            const bbox = obj.bbox;  // [x1, y1, x2, y2] in image coordinates
+            
+            // Clamp coordinates to video bounds
+            const x1 = Math.max(0, Math.min(bbox[0], videoWidth));
+            const y1 = Math.max(0, Math.min(bbox[1], videoHeight));
+            const x2 = Math.max(x1, Math.min(bbox[2], videoWidth));
+            const y2 = Math.max(y1, Math.min(bbox[3], videoHeight));
+            
+            const width = x2 - x1;
+            const height = y2 - y1;
+            
+            // Skip if box is too small
+            if (width < 10 || height < 10) {
+                return;
+            }
+            
+            // Determine color and label based on context
+            let boxColor, labelBgColor, label;
+            
+            if (handsDetected) {
+                // Hands detected = 橙色 "Grasping" (hand holding object)
+                boxColor = 'rgba(255, 140, 0, 1)';
+                labelBgColor = 'rgba(255, 140, 0, 0.95)';
+                label = `Grasping (${(obj.confidence * 100).toFixed(0)}%)`;
+            } else {
+                // No hands = 红色 "Object" (just object)
+                boxColor = 'rgba(211, 47, 47, 1)';
+                labelBgColor = 'rgba(211, 47, 47, 0.95)';
+                label = `Object (${(obj.confidence * 100).toFixed(0)}%)`;
+            }
+            
+            // Draw rectangle for object
+            canvasCtx.strokeStyle = boxColor;
+            canvasCtx.lineWidth = 2;
+            canvasCtx.strokeRect(x1, y1, width, height);
+            
+            // Draw label with background
+            canvasCtx.font = 'bold 13px Arial';
+            const textWidth = canvasCtx.measureText(label).width;
+            const labelPadding = 5;
+            const labelHeight = 22;
+            
+            // Position label at top of box, ensuring it stays in bounds
+            const labelY = Math.max(0, y1 - labelHeight - 2);
+            
+            canvasCtx.fillStyle = labelBgColor;
+            canvasCtx.fillRect(
+                x1, 
+                labelY,
+                textWidth + 2 * labelPadding,
+                labelHeight
+            );
+   
+            
+            canvasCtx.fillStyle = 'rgba(255, 255, 255, 1)';
+            canvasCtx.fillText(label, x1 + labelPadding, labelY + 16);
+        }
+
+        function drawHand(hand, videoWidth, videoHeight) {
+            // Draw hand skeleton connections
+            if (hand.landmarks && hand.landmarks.length > 0) {
+                drawHandSkeleton(hand.landmarks, videoWidth, videoHeight);
+                drawLandmarks(hand.landmarks, videoWidth, videoHeight);
+            }
+            
+            // Draw hand label above landmarks
+            if (hand.landmarks && hand.landmarks.length > 0) {
+                const firstLandmark = hand.landmarks[0];
+                const x = firstLandmark.x * videoWidth;
+                const y = Math.max(20, firstLandmark.y * videoHeight - 20);
+                
+                canvasCtx.fillStyle = 'rgba(0, 255, 0, 0.9)';
+                canvasCtx.font = 'bold 14px Arial';
+                canvasCtx.fillText(`${hand.hand_type} (${(hand.confidence * 100).toFixed(0)}%)`, x, y);
+            }
+        }
+
+        function drawLandmarks(landmarks, videoWidth, videoHeight) {
+            canvasCtx.fillStyle = 'rgba(0, 255, 0, 0.8)';
+            canvasCtx.strokeStyle = 'rgba(0, 255, 0, 0.6)';
+            
+            landmarks.forEach(landmark => {
+                const x = landmark.x * videoWidth;
+                const y = landmark.y * videoHeight;
+                
+                canvasCtx.beginPath();
+                canvasCtx.arc(x, y, 4, 0, 2 * Math.PI);
+                canvasCtx.fill();
+            });
+        }
+
+        function drawHandSkeleton(landmarks, videoWidth, videoHeight) {
+            // Hand skeleton connections (MediaPipe hand landmarks)
+            const connections = [
+                [0, 1], [1, 2], [2, 3], [3, 4],           // Thumb
+                [0, 5], [5, 6], [6, 7], [7, 8],           // Index
+                [0, 9], [9, 10], [10, 11], [11, 12],      // Middle
+                [0, 13], [13, 14], [14, 15], [15, 16],    // Ring
+                [0, 17], [17, 18], [18, 19], [19, 20]     // Pinky
+            ];
+            
+            canvasCtx.strokeStyle = 'rgba(0, 200, 255, 0.6)';
+            canvasCtx.lineWidth = 2;
+            
+            connections.forEach(conn => {
+                if (landmarks[conn[0]] && landmarks[conn[1]]) {
+                    const x1 = landmarks[conn[0]].x * videoWidth;
+                    const y1 = landmarks[conn[0]].y * videoHeight;
+                    const x2 = landmarks[conn[1]].x * videoWidth;
+                    const y2 = landmarks[conn[1]].y * videoHeight;
+                    
+                    canvasCtx.beginPath();
+                    canvasCtx.moveTo(x1, y1);
+                    canvasCtx.lineTo(x2, y2);
+                    canvasCtx.stroke();
+                }
+            });
+        }
+
+        function updateVideoResult(detectionResult) {
+            result.style.display = 'block';
+            resultSummary.style.display = 'none';
+            
+            // Format hand details
+            let resultHtml = `<div class="result-box">
+                <div class="result-box-label">Hands Detected:</div>
+                <div class="result-box-value">${detectionResult.hands_detected}</div>
+            </div>
+            <div class="result-box">
+                <div class="result-box-label">Pose Description:</div>
+                <div class="result-box-value">${detectionResult.pose_description || 'No hands detected'}</div>
+            </div>`;
+            
+            // Add objects detected section
+            if (detectionResult.objects_detected && detectionResult.objects_detected.length > 0) {
+                resultHtml += `<div class="result-box">
+                    <div class="result-box-label">Objects Detected (${detectionResult.objects_detected.length}):</div>
+                    <div class="result-box-value">`;
+                
+                detectionResult.objects_detected.forEach((obj) => {
+                    resultHtml += `<div style="margin-bottom: 8px; padding: 8px; background: #fff3e0; border-radius: 4px; border-left: 3px solid #ff6f00;">
+                        <strong>${obj.category}</strong> (${(obj.confidence * 100).toFixed(1)}%)
+                    </div>`;
+                });
+                
+                resultHtml += `</div></div>`;
+            }
+            
+            if (detectionResult.hand_details && detectionResult.hand_details.length > 0) {
+                resultHtml += `<div class="result-box">
+                    <div class="result-box-label">Hand Details:</div>
+                    <div class="result-box-value">`;
+                
+                detectionResult.hand_details.forEach((hand) => {
+                    resultHtml += `<div style="margin-bottom: 12px; padding: 10px; background: #f0f8ff; border-radius: 6px;">
+                        <strong>${hand.hand_type} Hand</strong><br>
+                        Confidence: ${(hand.confidence * 100).toFixed(1)}%<br>
+                        Pose: ${hand.pose_description}
+                    </div>`;
+                });
+                
+                resultHtml += `</div></div>`;
+            }
+            
+            resultBox.innerHTML = resultHtml;
+            
+            // Optional: Show compact response (avoid huge JSON every 300ms)
+            const compactResponse = {
+                hands_detected: detectionResult.hands_detected,
+                pose_description: detectionResult.pose_description,
+                timestamp: new Date().toISOString()
+            };
+            resultContent.innerHTML = '<div style="font-size: 12px; color: #7f8c8d; margin-bottom: 8px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px;">Latest Detection:</div>' + 
+                                    '<pre style="margin: 0;">' + JSON.stringify(compactResponse, null, 2) + '</pre>';
+            resultContent.style.color = '#2c3e50';
+        }
 
         uploadBtn.addEventListener('click', () => {
             stopCamera();
@@ -634,6 +1305,102 @@
             }
         });
 
+        // Hand Detection Button Handler
+        const handDetectionBtn = document.getElementById('handDetectionBtn');
+        
+        handDetectionBtn.addEventListener('click', async (e) => {
+            e.preventDefault();
+            
+            if (!capturedBlob) {
+                alert('Please select or capture an image first');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('image', capturedBlob, 'image.jpg');
+
+            handDetectionBtn.disabled = true;
+            loading.style.display = 'block';
+            result.style.display = 'none';
+
+            try {
+                const response = await fetch('/hand_detection', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                loading.style.display = 'none';
+                result.style.display = 'block';
+
+                if (data.success) {
+                    resultSummary.style.display = 'none';
+                    
+                    // Display hand detection results
+                    let resultHtml = `<div class="result-box">
+                        <div class="result-box-label">Hands Detected:</div>
+                        <div class="result-box-value">${data.hands_detected}</div>
+                    </div>
+                    <div class="result-box">
+                        <div class="result-box-label">Pose Description:</div>
+                        <div class="result-box-value">${data.pose_description}</div>
+                    </div>`;
+                    
+                    // Add detailed hand information if available
+                    if (data.hand_details && data.hand_details.length > 0) {
+                        resultHtml += `<div class="result-box">
+                            <div class="result-box-label">Hand Details:</div>
+                            <div class="result-box-value">`;
+                        
+                        data.hand_details.forEach((hand, idx) => {
+                            resultHtml += `<div style="margin-bottom: 12px; padding: 10px; background: #f0f8ff; border-radius: 6px;">
+                                <strong>${hand.hand_type} Hand (${hand.hand_number})</strong><br>
+                                Confidence: ${(hand.confidence * 100).toFixed(1)}%<br>
+                                Pose: ${hand.pose_description}
+                            </div>`;
+                        });
+                        
+                        resultHtml += `</div></div>`;
+                    }
+                    
+                    resultBox.innerHTML = resultHtml;
+                    resultContent.innerHTML = '<div style="font-size: 12px; color: #7f8c8d; margin-bottom: 8px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px;">Full Response:</div>' + 
+                                            '<pre style="margin: 0;">' + JSON.stringify(data, null, 2) + '</pre>';
+                    resultContent.style.color = '#2c3e50';
+                    
+                    // Display annotated image
+                    const resultImage = document.getElementById('resultImage');
+                    if (data.annotated_image) {
+                        resultImage.innerHTML = `
+                            <div style="margin-top: 30px;">
+                                <h3 style="color: #2c3e50; font-size: 16px; font-weight: 700; margin-bottom: 15px;">
+                                    Hand Landmarks Visualization
+                                </h3>
+                                <img src="data:image/jpeg;base64,${data.annotated_image}" style="max-width: 100%; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
+                            </div>
+                        `;
+                    } else {
+                        resultImage.innerHTML = '';
+                    }
+                } else {
+                    resultSummary.style.display = 'none';
+                    resultContent.textContent = `Error: ${data.error}`;
+                    resultContent.style.color = '#e74c3c';
+                    document.getElementById('resultImage').innerHTML = '';
+                }
+            } catch (error) {
+                loading.style.display = 'none';
+                result.style.display = 'block';
+                resultSummary.style.display = 'none';
+                resultContent.textContent = `Error: ${error.message}`;
+                resultContent.style.color = '#e74c3c';
+                document.getElementById('resultImage').innerHTML = '';
+            } finally {
+                handDetectionBtn.disabled = false;
+            }
+        });
+
         function displaySummary(healthCheck) {
             const summary = resultSummary;
             const overall = healthCheck.overall.toLowerCase();
@@ -680,8 +1447,9 @@
             summary.style.display = 'block';
         }
 
-        // Remote ESP32 Check Form Handler
+        // Remote ESP32 Check Form Handler (disabled - form not in HTML)
         const remoteCheckForm = document.getElementById('remoteCheckForm');
+        if (remoteCheckForm) {
         const remoteUrl = document.getElementById('remoteUrl');
         const checkEndpoint = document.getElementById('checkEndpoint');
         const imageUrl = document.getElementById('imageUrl');
@@ -745,6 +1513,7 @@
                 submitBtn.disabled = false;
             }
         });
+        }  // End of remoteCheckForm check
 
         // ESP32 Fetch & Analyze Form Handler
         const esp32AnalyzeForm = document.getElementById('esp32AnalyzeForm');
@@ -859,6 +1628,49 @@
                 resultContent.style.color = '#e74c3c';
             } finally {
                 submitBtn.disabled = false;
+            }
+        });
+
+        // Mode Toggle Event Listeners
+        imageModeBtn.addEventListener('click', (e) => {
+            console.log('Image Mode button clicked');
+            e.preventDefault();
+            if (isVideoMode) {
+                switchMode(false);
+            }
+        });
+
+        videoModeBtn.addEventListener('click', (e) => {
+            console.log('Video Mode button clicked');
+            e.preventDefault();
+            if (!isVideoMode) {
+                switchMode(true);
+            }
+        });
+
+        // Video Control Event Listeners
+        startCameraBtn.addEventListener('click', () => {
+            startVideoCamera();
+        });
+
+        stopCameraBtn.addEventListener('click', () => {
+            stopVideoCamera();
+        });
+
+        startDetectionBtn.addEventListener('click', () => {
+            startVideoDetection();
+        });
+
+        stopDetectionBtn.addEventListener('click', () => {
+            stopVideoDetection();
+        });
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            if (isVideoMode) {
+                cleanupVideoMode();
+            } else {
+                stopCamera();
             }
         });
     </script>
