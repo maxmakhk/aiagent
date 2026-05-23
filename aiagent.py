@@ -1,3 +1,4 @@
+#python aiagent.py
 import os
 
 # Toggle offline cache-only mode with HF_OFFLINE=1
@@ -30,6 +31,7 @@ skip_model_load = os.environ.get('SKIP_MODEL_LOAD') == '1'
 from flask import Flask, request, jsonify, render_template, send_from_directory
 from flask_cors import CORS
 
+print("python aiagent.py")
 print("GPU:", torch.cuda.is_available())
 print("HF offline mode:", hf_offline)
 
@@ -560,54 +562,139 @@ def image_to_base64(image_np):
     base64_image = base64.b64encode(buffer).decode('utf-8')
     return base64_image
 
-def detect_objects(image_np):
+def draw_objects_grasp(image_np, objects):
+    """
+    Draw object bounding boxes and grasp indicators on the image.
+    - Normal object  : blue box  labelled "Object <conf>"
+    - Grasped object : orange box labelled "GRASP <conf>"
+    """
+    annotated = image_np.copy()
+    for obj in objects:
+        x1, y1, x2, y2 = obj['bbox']
+        is_grasp = obj.get('overlaps_hand', False)
+        confidence = obj.get('confidence', 0.0)
+        category = obj.get('category', 'Object')
+
+        if is_grasp:
+            color = (0, 165, 255)   # Orange (BGR)
+            label = f"GRASP {confidence:.2f}"
+            thickness = 3
+        else:
+            color = (255, 80, 0)    # Blue (BGR)
+            label = f"{category} {confidence:.2f}"
+            thickness = 2
+
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, thickness)
+
+        # Label background
+        (lw, lh), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+        label_y0 = max(y1 - lh - baseline - 4, 0)
+        cv2.rectangle(annotated, (x1, label_y0), (x1 + lw, label_y0 + lh + baseline + 4), color, -1)
+        cv2.putText(annotated, label, (x1, label_y0 + lh + 2),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+    return annotated
+
+# COCO-compatible category groups for convenient filtering
+CATEGORY_GROUPS = {
+    "vehicle": {"car", "truck", "bus", "motorcycle", "bicycle", "train",
+                "airplane", "boat", "vehicle"},
+    "person":  {"person", "pedestrian", "man", "woman", "child"},
+    "animal":  {"cat", "dog", "horse", "sheep", "cow", "elephant",
+                "bear", "zebra", "giraffe", "bird"},
+    "furniture":   {"chair", "couch", "bed", "dining table", "toilet"},
+    "electronics": {"tv", "laptop", "cell phone", "keyboard", "mouse",
+                    "remote", "microwave", "oven"},
+}
+
+# Per-category display colours (BGR)
+_CATEGORY_COLOURS = {
+    "person":     (0,   255, 128),
+    "car":        (0,   128, 255),
+    "truck":      (0,   80,  200),
+    "bus":        (0,   60,  180),
+    "motorcycle": (0,   200, 255),
+    "bicycle":    (100, 200, 255),
+    "train":      (50,  50,  255),
+    "airplane":   (200, 100, 255),
+    "boat":       (255, 150, 0),
+    "default":    (255, 80,  0),
+}
+
+def _category_colour(category):
+    name = category.lower()
+    for key, colour in _CATEGORY_COLOURS.items():
+        if key in name:
+            return colour
+    return _CATEGORY_COLOURS["default"]
+
+def _expand_filter(filter_categories):
+    """Expand group aliases (e.g. 'vehicle') into individual category names."""
+    if not filter_categories:
+        return None
+    expanded = set()
+    for c in filter_categories:
+        cl = c.lower().strip()
+        if cl in CATEGORY_GROUPS:
+            expanded |= CATEGORY_GROUPS[cl]
+        else:
+            expanded.add(cl)
+    return expanded
+
+def detect_objects(image_np, hand_bboxes=None, filter_categories=None, hint_bbox=None):
     """
     Detect objects in image and return bounding boxes with confidence scores.
-    Uses MediaPipe ObjectDetector if available, otherwise uses simple contour detection.
-    
+    Uses MediaPipe ObjectDetector if available, otherwise uses contour detection.
+
     Args:
         image_np: numpy array image in BGR format
-        
+        hand_bboxes: optional list of hand bboxes [[x1,y1,x2,y2], ...]
+        filter_categories: optional list of category names or group aliases.
+            e.g. ["person", "vehicle"] — pass None to return all.
+        hint_bbox: optional [x1,y1,x2,y2] to bias scoring toward a tracked object.
+
     Returns:
-        List of detected objects with bounding boxes and labels:
-        [{"bbox": [x1, y1, x2, y2], "category": "object_name", "confidence": score}, ...]
+        [{"bbox": [x1,y1,x2,y2], "category": str, "confidence": float}, ...]
     """
+    allowed = _expand_filter(filter_categories)
+
     try:
         # Try using MediaPipe ObjectDetector (if available)
         from mediapipe.tasks import python
         from mediapipe.tasks.python import vision
-        import os as mp_os
-        
+
         # Path to object detection model
         model_path = os.path.join(os.path.dirname(__file__), 'efficientdet_lite0.tflite')
-        
+
         if os.path.exists(model_path):
             detector = vision.ObjectDetector.create_from_model_path(model_path)
             rgb_image = cv2.cvtColor(image_np, cv2.COLOR_BGR2RGB)
             mp_image = vision.Image(image_format=vision.ImageFormat.SRGB, data=rgb_image)
             detection_result = detector.detect(mp_image)
-            
+
             objects = []
-            h, w = image_np.shape[:2]
-            
             for detection in detection_result.detections:
+                if not detection.categories:
+                    continue
+                category = detection.categories[0].category_name
+                confidence = detection.categories[0].score
+
+                # Apply category filter
+                if allowed and category.lower() not in allowed:
+                    print(f"[Object Detection] Skipping '{category}' (not in filter)")
+                    continue
+
                 bbox = detection.bounding_box
-                x1 = int(bbox.origin_x * w)
-                y1 = int(bbox.origin_y * h)
-                x2 = int((bbox.origin_x + bbox.width) * w)
-                y2 = int((bbox.origin_y + bbox.height) * h)
-                
-                # Get category label
-                category = "Object"
-                if detection.categories:
-                    category = detection.categories[0].category_name
-                    confidence = detection.categories[0].score
-                    objects.append({
-                        "bbox": [x1, y1, x2, y2],
-                        "category": category,
-                        "confidence": float(confidence)
-                    })
-            
+                objects.append({
+                    "bbox": [int(bbox.origin_x), int(bbox.origin_y),
+                             int(bbox.origin_x + bbox.width),
+                             int(bbox.origin_y + bbox.height)],
+                    "category": category,
+                    "confidence": float(confidence)
+                })
+
+            print(f"[Object Detection] MediaPipe: {len(objects)} objects"
+                  + (f" (filter={filter_categories})" if filter_categories else ""))
             return objects
     except Exception as e:
         # MediaPipe ObjectDetector not available or failed
@@ -660,13 +747,13 @@ def detect_objects(image_np):
         contours, hierarchy = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         
         objects = []
-        min_area = (w_img * h_img) * 0.002  # 0.2% of image area (lowered from 0.5%)
-        max_area = (w_img * h_img) * 0.85  # Max 85% (raised from 50%)
+        min_area = (w_img * h_img) * 0.002   # 0.2% of image area
+        max_area = (w_img * h_img) * 0.40    # Max 40%: reject background/desk blobs
         
         print(f"[Object Detection] Image: {w_img}x{h_img}, ROI: ({roi_x1},{roi_y1}) to ({roi_x2},{roi_y2}), Found {len(contours)} contours")
         print(f"[Object Detection] Area filter: {min_area:.0f} - {max_area:.0f}")
         
-        # Find the best-scoring object in ROI using multiple heuristics
+        # Find the best-scoring object using center-priority scoring
         largest_obj = None
         largest_score = -1e9
         valid_contours = []
@@ -674,6 +761,7 @@ def detect_objects(image_np):
         # Image center for center-score calculation
         img_cx = w_img / 2.0
         img_cy = h_img / 2.0
+        # Use half-diagonal as normalisation (so center_score=1 at center, 0 at corner)
         max_dist = (img_cx**2 + img_cy**2)**0.5
 
         for idx, contour in enumerate(contours):
@@ -686,46 +774,70 @@ def detect_objects(image_np):
             x, y, cw, ch = cv2.boundingRect(contour)
             x2, y2 = x + cw, y + ch
 
-            # Calculate center of object
-            cx = (x + x2) / 2
-            cy = (y + y2) / 2
-
-            # Prefer objects in center ROI
-            in_roi = (roi_x1 <= cx <= roi_x2) and (roi_y1 <= cy <= roi_y2)
-            roi_bonus_score = 2.0 if in_roi else 0.0
-
-            # Skip very small boxes (lowered from 15 to 10 for debugging)
             if cw < 10 or ch < 10:
                 continue
 
-            # Basic measurements
-            extent = (area / float(cw * ch)) if (cw * ch) > 0 else 0.0
-            # Convex hull solidity
-            try:
-                hull = cv2.convexHull(contour)
-                hull_area = cv2.contourArea(hull)
-                solidity = (area / hull_area) if hull_area > 0 else 0.0
-            except Exception:
-                solidity = 0.0
+            # Object center
+            cx = (x + x2) / 2.0
+            cy = (y + y2) / 2.0
 
-            # Confidence (keeps previous heuristic but used as one feature)
-            area_ratio = extent
-            confidence = min(max(area_ratio - 0.1, 0.15), 1.0)
-
-            # Center score: higher if object is near image center
+            # --- CENTER SCORE (primary): objects closer to image centre score higher ---
             dist = ((cx - img_cx)**2 + (cy - img_cy)**2)**0.5
             center_score = max(0.0, 1.0 - (dist / max_dist))
 
-            # Combined object score (weights tuned for center + solidity + extent)
-            object_score = (
-                0.40 * confidence +
-                0.30 * solidity +
-                0.20 * extent +
-                0.10 * center_score
-            )
+            # --- SIZE SCORE: prefer medium-sized objects, penalise very large blobs ---
+            area_ratio = area / float(w_img * h_img)
+            # Peak at ~8% of image; falls off for tiny (<1%) or huge (>30%) objects
+            size_score = max(0.0, 1.0 - abs(area_ratio - 0.08) / 0.25)
 
-            # Apply ROI boost
-            adjusted_score = object_score + roi_bonus_score
+            # --- SHAPE SCORE: compact/solid objects preferred over thin noise ---
+            extent = area / float(cw * ch) if (cw * ch) > 0 else 0.0
+            try:
+                hull = cv2.convexHull(contour)
+                hull_area = cv2.contourArea(hull)
+                solidity = area / hull_area if hull_area > 0 else 0.0
+            except Exception:
+                solidity = 0.0
+            shape_score = 0.5 * extent + 0.5 * solidity
+
+            # --- ROI bonus: extra boost when centre is inside the middle 60% zone ---
+            in_roi = (roi_x1 <= cx <= roi_x2) and (roi_y1 <= cy <= roi_y2)
+            roi_bonus = 1.5 if in_roi else 0.0
+
+            # Combined score: centre is the dominant factor (0.55 weight)
+            object_score = (
+                0.55 * center_score +
+                0.25 * size_score +
+                0.20 * shape_score
+            )
+            adjusted_score = object_score + roi_bonus
+
+            # Confidence exposed in result (derived from shape quality)
+            confidence = min(max(shape_score - 0.1, 0.15), 1.0)
+
+            # Hand proximity boost: objects overlapping a hand are likely being grasped
+            if hand_bboxes:
+                for _hb in hand_bboxes:
+                    _xA = max(x, _hb[0]);  _yA = max(y, _hb[1])
+                    _xB = min(x2, _hb[2]); _yB = min(y2, _hb[3])
+                    _inter = max(0, _xB - _xA) * max(0, _yB - _yA)
+                    _union = (cw * ch) + max(0, _hb[2] - _hb[0]) * max(0, _hb[3] - _hb[1]) - _inter
+                    _iou_hand = _inter / _union if _union > 0 else 0.0
+                    if _iou_hand > 0.02:
+                        adjusted_score += 4.0 * min(_iou_hand * 5, 1.0)
+                        break
+
+            # Hint bbox boost: heavily favour the region being tracked
+            if hint_bbox:
+                _hxA = max(x, hint_bbox[0]); _hyA = max(y, hint_bbox[1])
+                _hxB = min(x2, hint_bbox[2]); _hyB = min(y2, hint_bbox[3])
+                _hint_inter = max(0, _hxB - _hxA) * max(0, _hyB - _hyA)
+                _hint_w = max(0, hint_bbox[2] - hint_bbox[0])
+                _hint_h = max(0, hint_bbox[3] - hint_bbox[1])
+                _hint_union = (cw * ch) + _hint_w * _hint_h - _hint_inter
+                _iou_hint = _hint_inter / _hint_union if _hint_union > 0 else 0.0
+                if _iou_hint > 0.1:
+                    adjusted_score += 8.0 * _iou_hint
 
             valid_obj = {
                 "idx": idx,
@@ -769,12 +881,14 @@ def detect_objects(image_np):
         traceback.print_exc()
         return []
 
-def detect_hand_pose(image_input):
+def detect_hand_pose(image_input, hint_bbox=None):
     """
     Detect hand landmarks and describe the hand pose
     
     Args:
         image_input: PIL Image or numpy array
+        hint_bbox: optional [x1,y1,x2,y2] in original image coords to bias
+                   object detection toward a tracked region.
         
     Returns:
         Dictionary with hand detection results including:
@@ -803,6 +917,14 @@ def detect_hand_pose(image_input):
             scale_factor = 800.0 / float(max_dim)
             new_w, new_h = int(w * scale_factor), int(h * scale_factor)
             image_np = cv2.resize(image_np, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
+
+        # Scale hint_bbox to match (possibly upscaled) image coordinates
+        scaled_hint_bbox = None
+        if hint_bbox and len(hint_bbox) == 4:
+            if scale_factor != 1.0:
+                scaled_hint_bbox = [int(c * scale_factor) for c in hint_bbox]
+            else:
+                scaled_hint_bbox = list(hint_bbox)
 
         # Initialize MediaPipe Hands with higher capacity and lower confidence thresholds
         # (model_complexity=1 for better accuracy; increase max_num_hands)
@@ -862,9 +984,8 @@ def detect_hand_pose(image_input):
             descriptions = [f"{h['hand_type'].lower()}: {h['pose_description']}" for h in hand_details]
             overall_description = f"Two hands detected. Left hand: {descriptions[0] if hand_details[0]['hand_type'] == 'Left' else descriptions[1]}. Right hand: {descriptions[1] if hand_details[0]['hand_type'] == 'Left' else descriptions[0]}"
         
-        # Detect objects in the image
-        objects = detect_objects(image_np)
-        # If hands were detected, compute hand bounding boxes (scaled coordinates)
+        # Compute hand bounding boxes (scaled pixel coords) BEFORE object detection
+        # so detect_objects can prioritise objects near/touching the hand.
         hand_bboxes = []
         if results.multi_hand_landmarks:
             for hand_landmarks in results.multi_hand_landmarks:
@@ -872,14 +993,17 @@ def detect_hand_pose(image_input):
                 ys = [lm.y for lm in hand_landmarks.landmark]
                 minx, maxx = min(xs), max(xs)
                 miny, maxy = min(ys), max(ys)
-                # Convert normalized landmarks to pixel coordinates on scaled image
                 bx1 = int(minx * w)
                 by1 = int(miny * h)
                 bx2 = int(maxx * w)
                 by2 = int(maxy * h)
                 hand_bboxes.append([bx1, by1, bx2, by2])
 
-        # Mark object overlap with hands (if any) on the scaled coordinates
+        # Detect the single best object with hand-aware scoring (scaled image coords)
+        objects = detect_objects(image_np, hand_bboxes=hand_bboxes if hand_bboxes else None,
+                                 hint_bbox=scaled_hint_bbox)
+
+        # IoU helper for overlap marking
         def _iou(boxA, boxB):
             xA = max(boxA[0], boxB[0])
             yA = max(boxA[1], boxB[1])
@@ -893,19 +1017,27 @@ def detect_hand_pose(image_input):
             union = boxAArea + boxBArea - interArea
             return (interArea / union) if union > 0 else 0.0
 
+        # Mark objects that overlap a hand bounding box (potential grasp)
         for obj in objects:
             obj['overlaps_hand'] = False
-            # obj['bbox'] are in scaled image coordinates already
             for hb in hand_bboxes:
                 try:
-                    iou_val = _iou(obj['bbox'], hb)
-                    if iou_val > 0.25:
+                    if _iou(obj['bbox'], hb) > 0.15:
                         obj['overlaps_hand'] = True
                         break
                 except Exception:
                     continue
 
-        # Scale object coordinates back to original image size if image was upscaled
+        # ── Draw on the SCALED image (best quality) ──────────────────────────
+        # 1. Hand landmarks
+        annotated_image_np = draw_hand_landmarks(
+            image_np, results.multi_hand_landmarks, results.multi_handedness)
+        # 2. Object box + GRASP indicator (still in scaled coords)
+        annotated_image_np = draw_objects_grasp(annotated_image_np, objects)
+        annotated_image_base64 = image_to_base64(annotated_image_np)
+        # ─────────────────────────────────────────────────────────────────────
+
+        # Scale object coordinates back to original image size
         if scale_factor != 1.0:
             for obj in objects:
                 obj['bbox'] = [
@@ -914,18 +1046,20 @@ def detect_hand_pose(image_input):
                     int(obj['bbox'][2] / scale_factor),
                     int(obj['bbox'][3] / scale_factor)
                 ]
-        
-        # Draw landmarks on image (using scaled version for better quality)
-        annotated_image_np = draw_hand_landmarks(image_np, results.multi_hand_landmarks, results.multi_handedness)
-        annotated_image_base64 = image_to_base64(annotated_image_np)
-        
+
+        # Grasp = at least one detected hand overlapping the selected object
+        grasped_objects = [obj for obj in objects if obj.get('overlaps_hand', False)]
+        grasp_detected = len(grasped_objects) > 0 and hands_detected > 0
+
         return {
             "success": True,
             "hands_detected": hands_detected,
             "hand_details": hand_details,
             "pose_description": overall_description,
             "annotated_image": annotated_image_base64,
-            "objects_detected": objects
+            "objects_detected": objects,
+            "grasp_detected": grasp_detected,
+            "grasped_objects": grasped_objects
         }
     
     except Exception as e:
@@ -1033,6 +1167,121 @@ def api_verify():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/detect_objects", methods=["POST"])
+def api_detect_objects():
+    """
+    General object detection with optional category filter.
+
+    Form fields:
+        image          : image file (required)
+        categories     : comma-separated names or group aliases.
+                         Groups: vehicle, person, animal, furniture, electronics
+                         e.g. "person,vehicle" or "car,bus,person"
+                         Omit to detect all objects.
+        min_confidence : float 0..1, default 0.3
+    """
+    try:
+        if 'image' not in request.files:
+            return jsonify({"success": False, "error": "No image field provided"}), 400
+
+        img_pil = Image.open(request.files['image'].stream)
+        image_np = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
+
+        raw_cats = request.form.get("categories", "").strip()
+        filter_categories = [c.strip() for c in raw_cats.split(",") if c.strip()] or None
+
+        try:
+            min_conf = float(request.form.get("min_confidence", 0.3))
+        except ValueError:
+            min_conf = 0.3
+
+        t0 = time.time()
+        objects = detect_objects(image_np, filter_categories=filter_categories)
+        elapsed = time.time() - t0
+
+        objects = [o for o in objects if o.get("confidence", 1.0) >= min_conf]
+
+        # Draw coloured boxes per category
+        annotated = image_np.copy()
+        for obj in objects:
+            x1, y1, x2, y2 = obj['bbox']
+            colour = _category_colour(obj.get('category', 'Object'))
+            label = f"{obj['category']} {obj['confidence']:.0%}"
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), colour, 2)
+            (lw, lh), bl = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+            ly0 = max(y1 - lh - bl - 4, 0)
+            cv2.rectangle(annotated, (x1, ly0), (x1 + lw, ly0 + lh + bl + 4), colour, -1)
+            cv2.putText(annotated, label, (x1, ly0 + lh + 2),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+        return jsonify({
+            "success": True,
+            "filter": filter_categories,
+            "min_confidence": min_conf,
+            "objects_detected": objects,
+            "count": len(objects),
+            "annotated_image": image_to_base64(annotated),
+            "elapsed": elapsed
+        })
+
+    except Exception as e:
+        import traceback
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
+
+
+@app.route("/detect_grasped", methods=["POST"])
+def api_detect_grasped():
+    """
+    Return only objects that appear to be grasped (overlap with detected hand).
+
+    Form fields:
+      image          : image file (required)
+      min_confidence : optional float 0..1 to filter returned grasped objects
+    """
+    try:
+        if 'image' not in request.files:
+            return jsonify({"success": False, "error": "No image field provided"}), 400
+
+        img_pil = Image.open(request.files['image'].stream)
+
+        try:
+            min_conf = float(request.form.get("min_confidence", 0.0))
+        except Exception:
+            min_conf = 0.0
+
+        t0 = time.time()
+        results = detect_hand_pose(img_pil)
+        elapsed = time.time() - t0
+
+        if not results.get("success"):
+            return jsonify({"success": False, "error": results.get("error", "detection failed")}), 500
+
+        grasped = results.get("grasped_objects", []) or []
+        # apply confidence filter
+        grasped = [o for o in grasped if o.get("confidence", 0.0) >= min_conf]
+
+        return jsonify({
+            "success": True,
+            "grasp_detected": results.get("grasp_detected", False),
+            "grasped_count": len(grasped),
+            "grasped_objects": grasped,
+            "annotated_image": results.get("annotated_image"),
+            "elapsed": elapsed
+        })
+
+    except Exception as e:
+        import traceback
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
+
+
 @app.route("/hand_detection", methods=["POST"])
 def api_hand_detection():
     """
@@ -1047,10 +1296,19 @@ def api_hand_detection():
         
         img_file = request.files['image']
         img = Image.open(img_file.stream)
-        
+
+        # Optional tracking hint: [x1,y1,x2,y2] in original image coords
+        hint_bbox = None
+        hint_bbox_raw = request.form.get('hint_bbox')
+        if hint_bbox_raw:
+            try:
+                hint_bbox = json.loads(hint_bbox_raw)
+            except Exception:
+                hint_bbox = None
+
         # Get hand detection results (includes object detection)
         t0 = time.time()
-        results = detect_hand_pose(img)
+        results = detect_hand_pose(img, hint_bbox=hint_bbox)
         elapsed = time.time() - t0
         
         if results.get("success"):
@@ -1060,6 +1318,8 @@ def api_hand_detection():
                 "pose_description": results["pose_description"],
                 "hand_details": results["hand_details"],
                 "objects_detected": results.get("objects_detected", []),
+                "grasp_detected": results.get("grasp_detected", False),
+                "grasped_objects": results.get("grasped_objects", []),
                 "annotated_image": results.get("annotated_image"),
                 "elapsed": elapsed
             })

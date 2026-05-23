@@ -427,6 +427,32 @@
             font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
         }
 
+        .grasp-pill {
+            margin-top: 10px;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.4px;
+            text-transform: uppercase;
+            border: 1px solid transparent;
+        }
+
+        .grasp-pill.detected {
+            color: #1b5e20;
+            background: #e8f5e9;
+            border-color: #66bb6a;
+        }
+
+        .grasp-pill.none {
+            color: #616161;
+            background: #eeeeee;
+            border-color: #bdbdbd;
+        }
+
         /* Video Control Buttons Grid */
         .video-controls {
             display: grid;
@@ -481,6 +507,33 @@
 
         .video-btn.stop-detection {
             background: #666666;
+        }
+
+        .video-btn.track-object {
+            background: #1565c0;
+        }
+
+        .video-btn.stop-track {
+            background: #b71c1c;
+        }
+
+        .tracking-active-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            background: #1565c0;
+            color: #fff;
+            margin-left: 8px;
+            animation: pulse-track 1.2s infinite;
+        }
+
+        @keyframes pulse-track {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
         }
 
         @media (max-width: 768px) {
@@ -601,6 +654,7 @@
                     <div class="video-status-label" id="videoStatusLabel">
                         Camera: Ready | Detection: Idle
                     </div>
+                    <div class="grasp-pill none" id="graspStatusPill">No Grasp</div>
                     <div class="video-controls">
                         <button type="button" class="video-btn start-camera" id="startCameraBtn">
                             <span>Start Camera</span>
@@ -613,6 +667,12 @@
                         </button>
                         <button type="button" class="video-btn stop-detection" id="stopDetectionBtn" disabled>
                             <span>Stop Detection</span>
+                        </button>
+                        <button type="button" class="video-btn track-object" id="trackObjectBtn" disabled>
+                            <span>Track Object</span>
+                        </button>
+                        <button type="button" class="video-btn stop-track" id="stopTrackBtn" disabled>
+                            <span>Stop Tracking</span>
                         </button>
                     </div>
                 </div>
@@ -716,6 +776,8 @@
         let isCameraRunning = false;
         let lastDetectionResult = null;
         let lastDetectionTime = null;
+        let trackedBbox = null;  // [x1,y1,x2,y2] in original image coords; null = not tracking
+        const GRASP_LABEL_MIN_CONF = 0.45;
 
         // Get video mode elements
         const videoPreview = document.getElementById('videoPreview');
@@ -729,6 +791,9 @@
         const stopCameraBtn = document.getElementById('stopCameraBtn');
         const startDetectionBtn = document.getElementById('startDetectionBtn');
         const stopDetectionBtn = document.getElementById('stopDetectionBtn');
+        const trackObjectBtn = document.getElementById('trackObjectBtn');
+        const stopTrackBtn = document.getElementById('stopTrackBtn');
+        const graspStatusPill = document.getElementById('graspStatusPill');
         const imageModeCtrls = document.querySelectorAll('.image-mode-controls');
 
         // Debug: Log if elements were found
@@ -775,6 +840,36 @@
             console.log('Status:', message);
         }
 
+        function setGraspStatus(isDetected, message) {
+            if (!graspStatusPill) return;
+            graspStatusPill.classList.remove('detected', 'none');
+            if (isDetected) {
+                graspStatusPill.classList.add('detected');
+                graspStatusPill.textContent = message || 'GRASP DETECTED';
+            } else {
+                graspStatusPill.classList.add('none');
+                graspStatusPill.textContent = message || 'NO GRASP';
+            }
+        }
+
+        function bboxSizeText(bbox) {
+            if (!bbox || bbox.length < 4) return 'n/a';
+            const w = Math.max(0, Math.round(bbox[2] - bbox[0]));
+            const h = Math.max(0, Math.round(bbox[3] - bbox[1]));
+            return `${w}x${h}`;
+        }
+
+        function getObjectIndex(objects, obj) {
+            if (!objects || !obj || !obj.bbox) return -1;
+            const k = obj.bbox.join(',');
+            return objects.findIndex((o) => (o.bbox || []).join(',') === k);
+        }
+
+        function getGraspedAboveThreshold(detectionResult) {
+            const grasped = detectionResult.grasped_objects || [];
+            return grasped.filter((obj) => (obj.confidence || 0) >= GRASP_LABEL_MIN_CONF);
+        }
+
         function cleanupVideoMode() {
             // Stop detection loop
             if (detectionIntervalId) {
@@ -791,10 +886,14 @@
             // Reset UI state
             isCameraRunning = false;
             isDetectingFrame = false;
+            trackedBbox = null;
             startCameraBtn.disabled = false;
             stopCameraBtn.disabled = true;
             startDetectionBtn.disabled = true;
             stopDetectionBtn.disabled = true;
+            trackObjectBtn.disabled = true;
+            stopTrackBtn.disabled = true;
+            setGraspStatus(false, 'NO GRASP');
             
             // Clear canvas overlay
             if (canvasCtx && videoCanvas) {
@@ -839,6 +938,7 @@
             
             startDetectionBtn.disabled = true;
             stopDetectionBtn.disabled = false;
+            trackObjectBtn.disabled = false;
             logStatus('Camera: Running | Detection: Starting...');
             
             // Run detection every 300ms
@@ -851,11 +951,163 @@
                 detectionIntervalId = null;
             }
             
+            // Also cancel any tracking
+            trackedBbox = null;
             startDetectionBtn.disabled = false;
             stopDetectionBtn.disabled = true;
+            trackObjectBtn.disabled = true;
+            stopTrackBtn.disabled = true;
             isDetectingFrame = false;
             
             logStatus('Camera: Running | Detection: Stopped');
+        }
+
+        // Track button: lock onto current detected object
+        trackObjectBtn.addEventListener('click', () => {
+            if (!lastDetectionResult) return;
+            const objs = lastDetectionResult.objects_detected || [];
+            if (objs.length === 0) {
+                alert('No object detected yet to track.');
+                return;
+            }
+            trackedBbox = objs[0].bbox.slice();  // copy [x1,y1,x2,y2]
+            trackObjectBtn.disabled = true;
+            stopTrackBtn.disabled = false;
+            logStatus(`Camera: Running | TRACKING object | BBox ${bboxSizeText(trackedBbox)}`);
+        });
+
+        // Stop track button: release tracking lock
+        stopTrackBtn.addEventListener('click', () => {
+            trackedBbox = null;
+            trackObjectBtn.disabled = false;
+            stopTrackBtn.disabled = true;
+            logStatus('Camera: Running | Detection: Active (tracking off)');
+        });
+
+        async function requestHandDetection(blob, filename = 'image.jpg') {
+            const formData = new FormData();
+            formData.append('image', blob, filename);
+
+            // Include tracking hint if active
+            if (trackedBbox) {
+                formData.append('hint_bbox', JSON.stringify(trackedBbox));
+            }
+
+            const response = await fetch('/hand_detection', {
+                method: 'POST',
+                body: formData
+            });
+
+            if (!response.ok) {
+                throw new Error(`Server error: ${response.status}`);
+            }
+
+            return await response.json();
+        }
+
+        function buildHandDetectionResultHtml(detectionResult) {
+            const objects = detectionResult.objects_detected || [];
+            const grasped = getGraspedAboveThreshold(detectionResult);
+            const hasGrasp = grasped.length > 0 && (detectionResult.hands_detected || 0) > 0;
+
+            let resultHtml = `<div class="result-box">
+                <div class="result-box-label">Hands Detected:</div>
+                <div class="result-box-value">${detectionResult.hands_detected}</div>
+            </div>
+            <div class="result-box">
+                <div class="result-box-label">Pose Description:</div>
+                <div class="result-box-value">${detectionResult.pose_description || 'No hands detected'}</div>
+            </div>`;
+
+            if (hasGrasp) {
+                const main = grasped[0];
+                const idx = getObjectIndex(objects, main);
+                const displayIdx = idx >= 0 ? idx + 1 : 1;
+                resultHtml += `<div class="result-box">
+                    <div class="result-box-label">Grasp Status:</div>
+                    <div class="result-box-value">GRASP DETECTED | Object #${displayIdx} | BBox ${bboxSizeText(main.bbox)} | ${(main.confidence * 100).toFixed(1)}%</div>
+                </div>`;
+            } else {
+                resultHtml += `<div class="result-box">
+                    <div class="result-box-label">Grasp Status:</div>
+                    <div class="result-box-value">NO GRASP (threshold: ${(GRASP_LABEL_MIN_CONF * 100).toFixed(0)}%)</div>
+                </div>`;
+            }
+
+            if (objects.length > 0) {
+                resultHtml += `<div class="result-box">
+                    <div class="result-box-label">Objects Detected (${objects.length}):</div>
+                    <div class="result-box-value">`;
+
+                objects.forEach((obj, idx) => {
+                    const objIsGrasp = (obj.overlaps_hand === true) && ((obj.confidence || 0) >= GRASP_LABEL_MIN_CONF);
+                    const tag = objIsGrasp ? 'GRASP' : 'OBJECT';
+                    resultHtml += `<div style="margin-bottom: 8px; padding: 8px; background: #fff3e0; border-radius: 4px; border-left: 3px solid ${objIsGrasp ? '#ff8f00' : '#d32f2f'};">
+                        <strong>#${idx + 1} ${obj.category}</strong> (${(obj.confidence * 100).toFixed(1)}%)<br>
+                        ${tag} | BBox ${bboxSizeText(obj.bbox)}
+                    </div>`;
+                });
+
+                resultHtml += `</div></div>`;
+            }
+
+            if (detectionResult.hand_details && detectionResult.hand_details.length > 0) {
+                resultHtml += `<div class="result-box">
+                    <div class="result-box-label">Hand Details:</div>
+                    <div class="result-box-value">`;
+
+                detectionResult.hand_details.forEach((hand) => {
+                    resultHtml += `<div style="margin-bottom: 12px; padding: 10px; background: #f0f8ff; border-radius: 6px;">
+                        <strong>${hand.hand_type} Hand${hand.hand_number ? ` (${hand.hand_number})` : ''}</strong><br>
+                        Confidence: ${(hand.confidence * 100).toFixed(1)}%<br>
+                        Pose: ${hand.pose_description}
+                    </div>`;
+                });
+
+                resultHtml += `</div></div>`;
+            }
+
+            return resultHtml;
+        }
+
+        function renderHandDetectionResult(detectionResult, options = {}) {
+            const opts = {
+                compact: false,
+                showAnnotatedImage: false,
+                ...options
+            };
+
+            result.style.display = 'block';
+            resultSummary.style.display = 'none';
+            resultBox.innerHTML = buildHandDetectionResultHtml(detectionResult);
+
+            if (opts.compact) {
+                const compactResponse = {
+                    hands_detected: detectionResult.hands_detected,
+                    pose_description: detectionResult.pose_description,
+                    timestamp: new Date().toISOString()
+                };
+                resultContent.innerHTML = '<div style="font-size: 12px; color: #7f8c8d; margin-bottom: 8px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px;">Latest Detection:</div>' +
+                    '<pre style="margin: 0;">' + JSON.stringify(compactResponse, null, 2) + '</pre>';
+            } else {
+                resultContent.innerHTML = '<div style="font-size: 12px; color: #7f8c8d; margin-bottom: 8px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px;">Full Response:</div>' +
+                    '<pre style="margin: 0;">' + JSON.stringify(detectionResult, null, 2) + '</pre>';
+            }
+            resultContent.style.color = '#2c3e50';
+
+            const resultImage = document.getElementById('resultImage');
+            if (opts.showAnnotatedImage && detectionResult.annotated_image) {
+                resultImage.innerHTML = `
+                    <div style="margin-top: 30px;">
+                        <h3 style="color: #2c3e50; font-size: 16px; font-weight: 700; margin-bottom: 15px;">
+                            Hand Landmarks Visualization
+                        </h3>
+                        <img src="data:image/jpeg;base64,${detectionResult.annotated_image}" style="max-width: 100%; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
+                    </div>
+                `;
+            } else {
+                resultImage.innerHTML = '';
+            }
         }
 
         async function captureAndDetect() {
@@ -872,21 +1124,8 @@
                     console.warn('Failed to capture frame');
                     return;
                 }
-                
-                // Send to server
-                const formData = new FormData();
-                formData.append('image', blob, 'video_frame.jpg');
-                
-                const response = await fetch('/hand_detection', {
-                    method: 'POST',
-                    body: formData
-                });
-                
-                if (!response.ok) {
-                    throw new Error(`Server error: ${response.status}`);
-                }
-                
-                const data = await response.json();
+
+                const data = await requestHandDetection(blob, 'video_frame.jpg');
                 
                 if (data.success) {
                     lastDetectionResult = data;
@@ -959,18 +1198,41 @@
             
             // Check if hands were detected
             const handsDetected = detectionResult.hands_detected && detectionResult.hands_detected > 0;
+            const grasped = getGraspedAboveThreshold(detectionResult);
+            const hasGrasp = grasped.length > 0 && handsDetected;
+
+            if (hasGrasp) {
+                const main = grasped[0];
+                const idx = getObjectIndex(detectionResult.objects_detected || [], main);
+                const displayIdx = idx >= 0 ? idx + 1 : 1;
+                const trackingTag = trackedBbox ? ' | TRACKING' : '';
+                setGraspStatus(true, `GRASP DETECTED | #${displayIdx} | ${bboxSizeText(main.bbox)}${trackingTag}`);
+            } else {
+                const trackingTag = trackedBbox ? ' | TRACKING' : '';
+                setGraspStatus(false, `NO GRASP | threshold ${(GRASP_LABEL_MIN_CONF * 100).toFixed(0)}%${trackingTag}`);
+            }
             
-            // Draw detected objects (show ALL for debugging)
-            // Temporarily lowered threshold to see all detections
-            const OBJECT_CONFIDENCE_THRESHOLD = 0.15;  // Very low for debugging
+            // Draw detected objects
+            const OBJECT_CONFIDENCE_THRESHOLD = 0.15;
             if (detectionResult.objects_detected && detectionResult.objects_detected.length > 0) {
                 console.log(`[DEBUG] Objects detected: ${detectionResult.objects_detected.length}, handsDetected: ${handsDetected}`);
                 detectionResult.objects_detected.forEach((obj, idx) => {
                     console.log(`  [${idx}] confidence: ${(obj.confidence*100).toFixed(1)}%, bbox: [${obj.bbox.join(',')}]`);
                     if (obj.confidence >= OBJECT_CONFIDENCE_THRESHOLD) {
-                        drawObjectBox(obj, videoWidth, videoHeight, handsDetected);
+                        const isGrasping = handsDetected && obj.overlaps_hand === true && (obj.confidence || 0) >= GRASP_LABEL_MIN_CONF;
+                        const isTracked = !!trackedBbox;
+                        drawObjectBox(obj, videoWidth, videoHeight, {
+                            isGrasping,
+                            objectIndex: idx + 1,
+                            isTracked
+                        });
                     }
                 });
+            }
+
+            // Draw tracking hint overlay (yellow pulsing border) when active
+            if (trackedBbox) {
+                drawTrackingOverlay(trackedBbox, videoWidth, videoHeight);
             }
             
             // Draw hand landmarks on top
@@ -984,7 +1246,41 @@
             });
         }
 
-        function drawObjectBox(obj, videoWidth, videoHeight, handsDetected) {
+        function drawTrackingOverlay(bbox, videoWidth, videoHeight) {
+            const x1 = Math.max(0, bbox[0]);
+            const y1 = Math.max(0, bbox[1]);
+            const x2 = Math.min(videoWidth, bbox[2]);
+            const y2 = Math.min(videoHeight, bbox[3]);
+            const w = x2 - x1;
+            const h = y2 - y1;
+            if (w < 4 || h < 4) return;
+
+            // Dashed yellow box
+            canvasCtx.save();
+            canvasCtx.strokeStyle = 'rgba(255, 230, 0, 0.9)';
+            canvasCtx.lineWidth = 2;
+            canvasCtx.setLineDash([8, 5]);
+            canvasCtx.strokeRect(x1 - 6, y1 - 6, w + 12, h + 12);
+            canvasCtx.setLineDash([]);
+
+            // "TRACKING" badge
+            canvasCtx.font = 'bold 12px Arial';
+            const label = 'TRACKING';
+            const tw = canvasCtx.measureText(label).width;
+            canvasCtx.fillStyle = 'rgba(255, 230, 0, 0.95)';
+            canvasCtx.fillRect(x1 - 6, y1 - 26, tw + 14, 20);
+            canvasCtx.fillStyle = '#000';
+            canvasCtx.fillText(label, x1 - 6 + 7, y1 - 10);
+            canvasCtx.restore();
+        }
+
+        function drawObjectBox(obj, videoWidth, videoHeight, options = {}) {
+            const opts = {
+                isGrasping: false,
+                objectIndex: 1,
+                isTracked: false,
+                ...options
+            };
             // Draw bounding box for detected object
             const bbox = obj.bbox;  // [x1, y1, x2, y2] in image coordinates
             
@@ -1005,16 +1301,26 @@
             // Determine color and label based on context
             let boxColor, labelBgColor, label;
             
-            if (handsDetected) {
-                // Hands detected = 橙色 "Grasping" (hand holding object)
+            if (opts.isTracked && opts.isGrasping) {
+                // Tracking + grasping = cyan
+                boxColor = 'rgba(0, 200, 255, 1)';
+                labelBgColor = 'rgba(0, 180, 230, 0.95)';
+                label = `TRACKING+GRASP (${(obj.confidence * 100).toFixed(0)}%) ${Math.round(width)}x${Math.round(height)}`;
+            } else if (opts.isTracked) {
+                // Tracking only = blue
+                boxColor = 'rgba(30, 120, 255, 1)';
+                labelBgColor = 'rgba(21, 101, 192, 0.95)';
+                label = `TRACKING (${(obj.confidence * 100).toFixed(0)}%) ${Math.round(width)}x${Math.round(height)}`;
+            } else if (opts.isGrasping) {
+                // Hands detected = orange "Grasping"
                 boxColor = 'rgba(255, 140, 0, 1)';
                 labelBgColor = 'rgba(255, 140, 0, 0.95)';
-                label = `Grasping (${(obj.confidence * 100).toFixed(0)}%)`;
+                label = `Grasping (${(obj.confidence * 100).toFixed(0)}%) #${opts.objectIndex} ${Math.round(width)}x${Math.round(height)}`;
             } else {
-                // No hands = 红色 "Object" (just object)
+                // No hands = red "Object"
                 boxColor = 'rgba(211, 47, 47, 1)';
                 labelBgColor = 'rgba(211, 47, 47, 0.95)';
-                label = `Object (${(obj.confidence * 100).toFixed(0)}%)`;
+                label = `Object (${(obj.confidence * 100).toFixed(0)}%) #${opts.objectIndex}`;
             }
             
             // Draw rectangle for object
@@ -1106,61 +1412,10 @@
         }
 
         function updateVideoResult(detectionResult) {
-            result.style.display = 'block';
-            resultSummary.style.display = 'none';
-            
-            // Format hand details
-            let resultHtml = `<div class="result-box">
-                <div class="result-box-label">Hands Detected:</div>
-                <div class="result-box-value">${detectionResult.hands_detected}</div>
-            </div>
-            <div class="result-box">
-                <div class="result-box-label">Pose Description:</div>
-                <div class="result-box-value">${detectionResult.pose_description || 'No hands detected'}</div>
-            </div>`;
-            
-            // Add objects detected section
-            if (detectionResult.objects_detected && detectionResult.objects_detected.length > 0) {
-                resultHtml += `<div class="result-box">
-                    <div class="result-box-label">Objects Detected (${detectionResult.objects_detected.length}):</div>
-                    <div class="result-box-value">`;
-                
-                detectionResult.objects_detected.forEach((obj) => {
-                    resultHtml += `<div style="margin-bottom: 8px; padding: 8px; background: #fff3e0; border-radius: 4px; border-left: 3px solid #ff6f00;">
-                        <strong>${obj.category}</strong> (${(obj.confidence * 100).toFixed(1)}%)
-                    </div>`;
-                });
-                
-                resultHtml += `</div></div>`;
-            }
-            
-            if (detectionResult.hand_details && detectionResult.hand_details.length > 0) {
-                resultHtml += `<div class="result-box">
-                    <div class="result-box-label">Hand Details:</div>
-                    <div class="result-box-value">`;
-                
-                detectionResult.hand_details.forEach((hand) => {
-                    resultHtml += `<div style="margin-bottom: 12px; padding: 10px; background: #f0f8ff; border-radius: 6px;">
-                        <strong>${hand.hand_type} Hand</strong><br>
-                        Confidence: ${(hand.confidence * 100).toFixed(1)}%<br>
-                        Pose: ${hand.pose_description}
-                    </div>`;
-                });
-                
-                resultHtml += `</div></div>`;
-            }
-            
-            resultBox.innerHTML = resultHtml;
-            
-            // Optional: Show compact response (avoid huge JSON every 300ms)
-            const compactResponse = {
-                hands_detected: detectionResult.hands_detected,
-                pose_description: detectionResult.pose_description,
-                timestamp: new Date().toISOString()
-            };
-            resultContent.innerHTML = '<div style="font-size: 12px; color: #7f8c8d; margin-bottom: 8px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px;">Latest Detection:</div>' + 
-                                    '<pre style="margin: 0;">' + JSON.stringify(compactResponse, null, 2) + '</pre>';
-            resultContent.style.color = '#2c3e50';
+            renderHandDetectionResult(detectionResult, {
+                compact: true,
+                showAnnotatedImage: false
+            });
         }
 
         uploadBtn.addEventListener('click', () => {
@@ -1324,65 +1579,16 @@
             result.style.display = 'none';
 
             try {
-                const response = await fetch('/hand_detection', {
-                    method: 'POST',
-                    body: formData
-                });
-
-                const data = await response.json();
+                const data = await requestHandDetection(capturedBlob, 'image.jpg');
 
                 loading.style.display = 'none';
                 result.style.display = 'block';
 
                 if (data.success) {
-                    resultSummary.style.display = 'none';
-                    
-                    // Display hand detection results
-                    let resultHtml = `<div class="result-box">
-                        <div class="result-box-label">Hands Detected:</div>
-                        <div class="result-box-value">${data.hands_detected}</div>
-                    </div>
-                    <div class="result-box">
-                        <div class="result-box-label">Pose Description:</div>
-                        <div class="result-box-value">${data.pose_description}</div>
-                    </div>`;
-                    
-                    // Add detailed hand information if available
-                    if (data.hand_details && data.hand_details.length > 0) {
-                        resultHtml += `<div class="result-box">
-                            <div class="result-box-label">Hand Details:</div>
-                            <div class="result-box-value">`;
-                        
-                        data.hand_details.forEach((hand, idx) => {
-                            resultHtml += `<div style="margin-bottom: 12px; padding: 10px; background: #f0f8ff; border-radius: 6px;">
-                                <strong>${hand.hand_type} Hand (${hand.hand_number})</strong><br>
-                                Confidence: ${(hand.confidence * 100).toFixed(1)}%<br>
-                                Pose: ${hand.pose_description}
-                            </div>`;
-                        });
-                        
-                        resultHtml += `</div></div>`;
-                    }
-                    
-                    resultBox.innerHTML = resultHtml;
-                    resultContent.innerHTML = '<div style="font-size: 12px; color: #7f8c8d; margin-bottom: 8px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px;">Full Response:</div>' + 
-                                            '<pre style="margin: 0;">' + JSON.stringify(data, null, 2) + '</pre>';
-                    resultContent.style.color = '#2c3e50';
-                    
-                    // Display annotated image
-                    const resultImage = document.getElementById('resultImage');
-                    if (data.annotated_image) {
-                        resultImage.innerHTML = `
-                            <div style="margin-top: 30px;">
-                                <h3 style="color: #2c3e50; font-size: 16px; font-weight: 700; margin-bottom: 15px;">
-                                    Hand Landmarks Visualization
-                                </h3>
-                                <img src="data:image/jpeg;base64,${data.annotated_image}" style="max-width: 100%; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
-                            </div>
-                        `;
-                    } else {
-                        resultImage.innerHTML = '';
-                    }
+                    renderHandDetectionResult(data, {
+                        compact: false,
+                        showAnnotatedImage: true
+                    });
                 } else {
                     resultSummary.style.display = 'none';
                     resultContent.textContent = `Error: ${data.error}`;
