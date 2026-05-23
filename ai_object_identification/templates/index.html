@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RefVision - Object Recognition MVP</title>
+    <!-- Google Fonts for premium typography -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    <!-- Styled CSS -->
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="glow-container">
+        <div class="glow-sphere glow-1"></div>
+        <div class="glow-sphere glow-2"></div>
+    </div>
+
+    <header class="app-header">
+        <div class="header-content">
+            <div class="logo">
+                <span class="logo-icon">👁️</span>
+                <h1>RefVision</h1>
+                <span class="badge">MVP</span>
+            </div>
+            <p class="subtitle">Reference-Based Closed-Set Object Recognizer & Counter</p>
+        </div>
+        
+        <div class="tab-nav">
+            <button class="tab-btn active" id="tab-btn-references" onclick="switchTab('references')">
+                <span class="btn-icon">📁</span> Reference Capture
+            </button>
+            <button class="tab-btn" id="tab-btn-recognition" onclick="switchTab('recognition')">
+                <span class="btn-icon">🔍</span> Scene Recognition
+            </button>
+        </div>
+    </header>
+
+    <main class="app-container">
+        <!-- Toast Status Alert -->
+        <div id="status-toast" class="toast hidden">
+            <span id="toast-message">Ready</span>
+        </div>
+
+        <!-- TAB 1: REFERENCE CAPTURE -->
+        <section id="tab-references" class="tab-content active-content">
+            <div class="grid-layout">
+                <!-- Column Left: Teach Object & Upload -->
+                <div class="card glass-card">
+                    <div class="card-header">
+                        <h2>Teach a New Target</h2>
+                        <p class="card-desc">Add a unique label and upload 5-20 reference images showing the object from different angles.</p>
+                    </div>
+
+                    <form id="create-label-form" onsubmit="handleCreateLabel(event)">
+                        <div class="input-group">
+                            <label for="new-label-name">Object Label</label>
+                            <div class="input-row">
+                                <input type="text" id="new-label-name" placeholder="e.g. red_box, blue_tool" required>
+                                <button type="submit" class="btn btn-primary">Create</button>
+                            </div>
+                        </div>
+                    </form>
+
+                    <div class="divider"></div>
+
+                    <div class="upload-section">
+                        <h3>Upload Reference Photos</h3>
+                        
+                        <div class="input-group">
+                            <label for="upload-target-select">Select Target Object</label>
+                            <select id="upload-target-select">
+                                <option value="" disabled selected>-- Choose an object --</option>
+                            </select>
+                        </div>
+
+                        <div class="dropzone" id="ref-dropzone" onclick="document.getElementById('ref-file-input').click()">
+                            <input type="file" id="ref-file-input" multiple accept="image/*" capture="environment" style="display:none" onchange="handleRefFileSelect(event)">
+                            <div class="dropzone-content">
+                                <span class="dropzone-icon">📸</span>
+                                <p class="dropzone-main-text">Take photos or upload files</p>
+                                <p class="dropzone-sub-text">Tap here to open Camera / File Selector</p>
+                                <div id="selected-ref-files-count" class="selected-count hidden">0 files selected</div>
+                            </div>
+                        </div>
+
+                        <button id="btn-upload-references" class="btn btn-success btn-block" disabled onclick="handleUploadReferences()">
+                            ⚡ Upload & Process Embeddings
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Column Right: Active Objects Gallery -->
+                <div class="card glass-card">
+                    <div class="card-header header-with-action">
+                        <div>
+                            <h2>Target Object Catalog</h2>
+                            <p class="card-desc">Your active closed-set vocabulary. These classes can be searched in cluttered scenes.</p>
+                        </div>
+                        <button class="btn btn-secondary btn-sm" onclick="rebuildEmbeddings()" title="Recompute embeddings for all objects">
+                            🔄 Rebuild Cache
+                        </button>
+                    </div>
+
+                    <div id="catalog-list" class="catalog-list">
+                        <!-- Loaded dynamically -->
+                        <div class="empty-state">
+                            <span class="empty-icon">📭</span>
+                            <p>No reference objects defined yet.</p>
+                            <p class="sub">Create a label and upload photos to get started.</p>
+                        </div>
+                    </div>
+
+                    <!-- Photo Gallery Modal/Area for Selected Object -->
+                    <div id="ref-gallery-section" class="ref-gallery-section hidden">
+                        <div class="gallery-header">
+                            <h3>Saved Reference Photos: <span id="gallery-title-label" class="glow-text"></span></h3>
+                            <button class="btn-close" onclick="closeRefGallery()">✕</button>
+                        </div>
+                        <div id="ref-gallery-grid" class="ref-gallery-grid">
+                            <!-- Populated dynamically -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- TAB 2: SCENE RECOGNITION -->
+        <section id="tab-recognition" class="tab-content">
+            <div class="grid-layout cols-2-3">
+                <!-- Column Left: Image Upload & Parameters -->
+                <div class="card glass-card">
+                    <div class="card-header">
+                        <h2>Run Object Detection</h2>
+                        <p class="card-desc">Scan any tabletop image using OpenCV proposals matched against your CLIP references.</p>
+                    </div>
+
+                    <div class="upload-section">
+                        <div class="dropzone" id="scene-dropzone" onclick="document.getElementById('scene-file-input').click()">
+                            <input type="file" id="scene-file-input" accept="image/*" capture="environment" style="display:none" onchange="handleSceneFileSelect(event)">
+                            <div class="dropzone-content">
+                                <span class="dropzone-icon">🕵️</span>
+                                <p class="dropzone-main-text">Capture Scene Photo</p>
+                                <p class="dropzone-sub-text">Open camera or select file to identify items</p>
+                                <div id="selected-scene-filename" class="selected-count hidden"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="controls-card">
+                        <h3>Detection Parameters</h3>
+
+                        <div class="control-group">
+                            <div class="control-label-row">
+                                <label for="threshold-slider">Confidence Threshold (Cosine Similarity)</label>
+                                <span id="threshold-val" class="badge">0.75</span>
+                            </div>
+                            <input type="range" id="threshold-slider" min="0.60" max="0.95" step="0.01" value="0.75" oninput="updateThresholdValue(this.value)">
+                            <div class="slider-labels">
+                                <span>0.60 (Loose)</span>
+                                <span>0.95 (Strict)</span>
+                            </div>
+                        </div>
+
+                        <div class="control-group">
+                            <label for="filter-label-select">Search Filter</label>
+                            <select id="filter-label-select">
+                                <option value="all">Search all reference objects</option>
+                                <!-- Populated dynamically -->
+                            </select>
+                        </div>
+
+                        <button id="btn-detect" class="btn btn-primary btn-block" disabled onclick="runRecognition()">
+                            🔍 Run Recognition Engine
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Column Right: Detection Viewers & Stats -->
+                <div class="card glass-card">
+                    <div class="card-header">
+                        <h2>Engine Results</h2>
+                        <p class="card-desc">Detections, visual bounds, item counts, and logs.</p>
+                    </div>
+
+                    <div id="recognition-empty-state" class="empty-state">
+                        <span class="empty-icon">🖼️</span>
+                        <p>No scene analyzed yet.</p>
+                        <p class="sub">Select a scene image on the left and trigger detection.</p>
+                    </div>
+
+                    <div id="recognition-results" class="results-container hidden">
+                        <!-- Side-by-side or stacked view -->
+                        <div class="view-panel">
+                            <div class="viewer-card">
+                                <h3>Annotated Result</h3>
+                                <div class="image-viewer">
+                                    <img id="result-image-view" src="" alt="Annotated Scene View">
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Statistics dashboard -->
+                        <div class="stats-dashboard">
+                            <div class="stats-card">
+                                <h3>Verified Detections Count</h3>
+                                <div id="stats-summary-grid" class="stats-summary-grid">
+                                    <!-- Dynamic counts -->
+                                </div>
+                            </div>
+
+                            <div class="stats-card debug-stats">
+                                <h3>Vision Engine Info</h3>
+                                <div class="debug-grid">
+                                    <div class="debug-item"><span class="lbl">Raw Contours:</span> <span id="dbg-raw" class="val">-</span></div>
+                                    <div class="debug-item"><span class="lbl">Merged Contours:</span> <span id="dbg-merged" class="val">-</span></div>
+                                    <div class="debug-item"><span class="lbl">Grid Fallback:</span> <span id="dbg-fallback" class="val">-</span></div>
+                                    <div class="debug-item"><span class="lbl">Final Candidates:</span> <span id="dbg-final" class="val">-</span></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- JSON Raw Output for debugging -->
+                        <details class="json-inspector">
+                            <summary>🐛 Expand JSON Response Debug Panel</summary>
+                            <pre><code id="json-raw-output">{}</code></pre>
+                        </details>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="app-footer">
+        <p>RefVision Engine • Created using Flask, OpenCV & Hugging Face CLIP</p>
+    </footer>
+
+    <!-- Core Logic JavaScript -->
+    <script src="/static/app.js"></script>
+</body>
+</html>
