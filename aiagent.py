@@ -60,9 +60,17 @@ import requests
 from datetime import datetime
 import uuid
 import shutil
+from collections import Counter
+from difflib import SequenceMatcher
 from mediapipe import solutions
 import numpy as np
 import cv2
+
+# Vision2 JSON storage
+VISION2_DATA_DIR = os.path.join(REFVISION_DATA_DIR, "vision2")
+VISION2_BARCODE_DB_PATH = os.path.join(VISION2_DATA_DIR, "barcode_db.json")
+VISION2_QRCODE_DB_PATH = os.path.join(VISION2_DATA_DIR, "qrcode_db.json")
+os.makedirs(VISION2_DATA_DIR, exist_ok=True)
 
 # Allow skipping heavy model load for quick testing (set SKIP_MODEL_LOAD=1)
 skip_model_load = os.environ.get('SKIP_MODEL_LOAD') == '1'
@@ -197,6 +205,857 @@ def parse_gauges_to_json(ocr_text, caption_text):
     print(f"[DEBUG] Final gauges: {unique_gauges}")
     
     return unique_gauges
+
+
+def _vision2_load_db(path):
+    if not os.path.exists(path):
+        return {"version": 1, "updated_at": datetime.utcnow().isoformat() + "Z", "records": []}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            raise ValueError("Invalid db format")
+        data.setdefault("version", 1)
+        data.setdefault("updated_at", datetime.utcnow().isoformat() + "Z")
+        data.setdefault("records", [])
+        if not isinstance(data["records"], list):
+            data["records"] = []
+        return data
+    except Exception:
+        return {"version": 1, "updated_at": datetime.utcnow().isoformat() + "Z", "records": []}
+
+
+def _vision2_save_db(path, payload):
+    payload["updated_at"] = datetime.utcnow().isoformat() + "Z"
+    tmp_path = path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, path)
+
+
+def _vision2_upsert_record(path, kind, record):
+    code = str(record.get("code", "")).strip()
+    if not code:
+        raise ValueError("'code' is required")
+
+    db = _vision2_load_db(path)
+    normalized = {
+        "kind": kind,
+        "code": code,
+        "name": str(record.get("name", "")).strip(),
+        "code_number": str(record.get("code_number", "")).strip(),
+        "simple_description": str(record.get("simple_description", "")).strip(),
+        "description": str(record.get("description", "")).strip(),
+        "tags": record.get("tags", []),
+        "updated_at": datetime.utcnow().isoformat() + "Z"
+    }
+    if not isinstance(normalized["tags"], list):
+        normalized["tags"] = []
+
+    replaced = False
+    for idx, existing in enumerate(db["records"]):
+        if str(existing.get("code", "")).strip() == code:
+            db["records"][idx] = {**existing, **normalized}
+            replaced = True
+            break
+
+    if not replaced:
+        db["records"].append(normalized)
+
+    _vision2_save_db(path, db)
+    return normalized
+
+
+def _vision2_delete_record(path, code):
+    db = _vision2_load_db(path)
+    original_count = len(db["records"])
+    db["records"] = [r for r in db["records"] if str(r.get("code", "")).strip() != str(code).strip()]
+    removed = original_count - len(db["records"])
+    if removed > 0:
+        _vision2_save_db(path, db)
+    return removed
+
+
+def _vision2_db_by_kind(kind):
+    kind_norm = str(kind).strip().lower()
+    if kind_norm == "barcode":
+        return "barcode", VISION2_BARCODE_DB_PATH
+    if kind_norm in ("qrcode", "qr", "qr_code"):
+        return "qrcode", VISION2_QRCODE_DB_PATH
+    raise ValueError("kind must be 'barcode' or 'qrcode'")
+
+
+def _vision2_rotate_image(image, angle):
+    """
+    Rotates an image by a given angle and returns the rotated image along with the inverse
+    transformation matrix to map coordinates back to the original image.
+    """
+    h, w = image.shape[:2]
+    center = (w // 2, h // 2)
+    M = cv2.getRotationMatrix2D(center, angle, 1.0)
+    
+    # Adjust matrix to prevent clipping
+    cos = np.abs(M[0, 0])
+    sin = np.abs(M[0, 1])
+    new_w = int((h * sin) + (w * cos))
+    new_h = int((h * cos) + (w * sin))
+    M[0, 2] += (new_w / 2) - center[0]
+    M[1, 2] += (new_h / 2) - center[1]
+    
+    rotated = cv2.warpAffine(image, M, (new_w, new_h), borderValue=(255, 255, 255))
+    M_inv = cv2.invertAffineTransform(M)
+    return rotated, M_inv
+
+
+def _vision2_detect_candidate_regions(image_np):
+    """
+    Locates candidate regions for barcodes/QR codes in the image using morphological operations.
+    Returns list of tuples (kind, (x1, y1, x2, y2)) in original image coordinates.
+    """
+    candidates = []
+    if image_np is None:
+        return candidates
+
+    h, w = image_np.shape[:2]
+    if len(image_np.shape) == 3:
+        gray = cv2.cvtColor(image_np, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = image_np.copy()
+
+    # Precalculate Sobel gradients with kernel size 3
+    try:
+        grad_x = cv2.Sobel(gray, ddepth=cv2.CV_32F, dx=1, dy=0, ksize=3)
+        grad_y = cv2.Sobel(gray, ddepth=cv2.CV_32F, dx=0, dy=1, ksize=3)
+        grad_x = cv2.convertScaleAbs(grad_x)
+        grad_y = cv2.convertScaleAbs(grad_y)
+    except Exception as e:
+        print(f"[Vision2] Sobel gradient computation failed: {e}")
+        return candidates
+
+    # --- 1. Barcode Region Proposals ---
+    try:
+        # Subtract vertical edges from horizontal gradients to isolate barcode stripes
+        gradient = cv2.subtract(grad_x, grad_y)
+        _, thresh = cv2.threshold(gradient, 25, 255, cv2.THRESH_BINARY)
+
+        # Close horizontally (horizontal kernel merges vertical stripes)
+        kernel_bc = cv2.getStructuringElement(cv2.MORPH_RECT, (35, 5))
+        closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel_bc)
+
+        # Clean noise
+        closed = cv2.erode(closed, None, iterations=2)
+        closed = cv2.dilate(closed, None, iterations=4)
+
+        contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for c in contours:
+            x, y, cw, ch = cv2.boundingRect(c)
+            if cw > 0 and ch > 0:
+                area = cw * ch
+                aspect_ratio = cw / float(ch)
+                # Barcodes are typically wide-ish
+                if area > 1000 and (0.3 < aspect_ratio < 10.0) and cw > 50 and ch > 20:
+                    candidates.append(("barcode", (x, y, x + cw, y + ch)))
+    except Exception as e:
+        print(f"[Vision2] Barcode candidate detection failed: {e}")
+
+    # --- 2. QR Code Region Proposals ---
+    try:
+        grad_abs = cv2.addWeighted(grad_x, 0.5, grad_y, 0.5, 0)
+        _, thresh_qr = cv2.threshold(grad_abs, 25, 255, cv2.THRESH_BINARY)
+
+        # Close with a square kernel
+        kernel_qr = cv2.getStructuringElement(cv2.MORPH_RECT, (21, 21))
+        closed_qr = cv2.morphologyEx(thresh_qr, cv2.MORPH_CLOSE, kernel_qr)
+        closed_qr = cv2.erode(closed_qr, None, iterations=2)
+        closed_qr = cv2.dilate(closed_qr, None, iterations=4)
+
+        contours_qr, _ = cv2.findContours(closed_qr, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for c in contours_qr:
+            x, y, cw, ch = cv2.boundingRect(c)
+            if cw > 0 and ch > 0:
+                area = cw * ch
+                aspect_ratio = cw / float(ch)
+                # QR codes are square-ish
+                if area > 1200 and (0.5 < aspect_ratio < 2.0) and cw > 40 and ch > 40:
+                    candidates.append(("qrcode", (x, y, x + cw, y + ch)))
+    except Exception as e:
+        print(f"[Vision2] QR candidate detection failed: {e}")
+
+    # --- 3. Merge overlapping candidates using IoA check ---
+    candidates = sorted(candidates, key=lambda x: (x[1][2] - x[1][0]) * (x[1][3] - x[1][1]), reverse=True)
+    merged = []
+    
+    for kind, box in candidates:
+        bx1, by1, bx2, by2 = box
+        b_area = (bx2 - bx1) * (by2 - by1)
+        
+        overlap = False
+        for m_kind, m_box in merged:
+            mx1, my1, mx2, my2 = m_box
+            
+            ix1 = max(bx1, mx1)
+            iy1 = max(by1, my1)
+            ix2 = min(bx2, mx2)
+            iy2 = min(by2, my2)
+            
+            if ix2 > ix1 and iy2 > iy1:
+                int_area = (ix2 - ix1) * (iy2 - iy1)
+                # If smaller candidate is mostly inside an already accepted candidate region
+                if int_area / float(b_area) > 0.6:
+                    overlap = True
+                    break
+        if not overlap:
+            merged.append((kind, box))
+            
+    return merged
+
+
+def _vision2_get_image_variants(image_np):
+    """
+    Generates multiple preprocessed, scaled, and rotated variants of the input image
+    to ensure extremely robust barcode and QR code detection under challenging conditions
+    (e.g., high resolution, tilt/rotation, bad lighting, shadows).
+    Returns:
+        List of tuples: (name, image, scale_x, scale_y, offset_x, offset_y, M_inv)
+    """
+    variants = []
+    if image_np is None:
+        return variants
+
+    height, width = image_np.shape[:2]
+    
+    # 1. Original (BGR)
+    variants.append(("original", image_np, 1.0, 1.0, 0, 0, None))
+
+    # 2. Grayscale
+    if len(image_np.shape) == 3:
+        gray = cv2.cvtColor(image_np, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = image_np.copy()
+    variants.append(("gray", gray, 1.0, 1.0, 0, 0, None))
+
+    # 3. CLAHE (Contrast Enhancement)
+    clahe = None
+    try:
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        clahe_gray = clahe.apply(gray)
+        variants.append(("clahe", clahe_gray, 1.0, 1.0, 0, 0, None))
+    except Exception:
+        clahe_gray = gray
+
+    # 4. Otsu Threshold
+    try:
+        _, binary_otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        variants.append(("otsu", binary_otsu, 1.0, 1.0, 0, 0, None))
+    except Exception:
+        pass
+
+    # 5. Adaptive Threshold
+    try:
+        adaptive = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 51, 11)
+        variants.append(("adaptive", adaptive, 1.0, 1.0, 0, 0, None))
+    except Exception:
+        pass
+
+    # 6. High-Resolution Downscaled Variants (Crucial for 1D Barcodes in pyzbar!)
+    for target_w in [1280, 800]:
+        if width > target_w:
+            try:
+                scale = target_w / width
+                target_h = int(height * scale)
+                scaled_gray = cv2.resize(gray, (target_w, target_h), interpolation=cv2.INTER_AREA)
+                variants.append((f"downscaled_{target_w}", scaled_gray, scale, scale, 0, 0, None))
+                
+                scaled_clahe = cv2.resize(clahe_gray, (target_w, target_h), interpolation=cv2.INTER_AREA)
+                variants.append((f"downscaled_clahe_{target_w}", scaled_clahe, scale, scale, 0, 0, None))
+            except Exception:
+                pass
+
+    # 7. Rotated Variants (Crucial for tilted/rotated barcodes!)
+    for angle in [-30, -15, 15, 30, 90]:
+        try:
+            rot_gray, M_inv = _vision2_rotate_image(gray, angle)
+            variants.append((f"rotated_{angle}", rot_gray, 1.0, 1.0, 0, 0, M_inv))
+            
+            rot_clahe, M_inv_clahe = _vision2_rotate_image(clahe_gray, angle)
+            variants.append((f"rotated_clahe_{angle}", rot_clahe, 1.0, 1.0, 0, 0, M_inv_clahe))
+        except Exception:
+            pass
+
+    # 8. Upscaled 2x (for small/distant codes)
+    try:
+        scaled_2x = cv2.resize(gray, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
+        variants.append(("scaled_2x", scaled_2x, 2.0, 2.0, 0, 0, None))
+    except Exception:
+        pass
+
+    # 9. Cropped top 88%
+    try:
+        crop_ratio = 0.88
+        crop_h = max(1, int(height * crop_ratio))
+        cropped_top = image_np[:crop_h, :]
+        variants.append(("cropped_top", cropped_top, 1.0, 1.0, 0, 0, None))
+        
+        cropped_top_2x = cv2.resize(cropped_top, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
+        variants.append(("cropped_top_2x", cropped_top_2x, 2.0, 2.0, 0, 0, None))
+    except Exception:
+        pass
+
+    # 10. Region of Interest (ROI) Candidate crops with 20% padding
+    roi_candidates = _vision2_detect_candidate_regions(image_np)
+    for idx, (kind, (bx1, by1, bx2, by2)) in enumerate(roi_candidates):
+        try:
+            cw = bx2 - bx1
+            ch = by2 - by1
+            
+            # Add 20% padding
+            pad_x = int(cw * 0.20)
+            pad_y = int(ch * 0.20)
+            
+            px1 = max(0, bx1 - pad_x)
+            py1 = max(0, by1 - pad_y)
+            px2 = min(width, bx2 + pad_x)
+            py2 = min(height, by2 + pad_y)
+            
+            cropped_roi = image_np[py1:py2, px1:px2]
+            if cropped_roi.size == 0:
+                continue
+                
+            roi_w = px2 - px1
+            scale = 1.0
+            
+            # Upscale if the candidate region is small
+            if roi_w < 400:
+                scale = 2.0
+                cropped_roi = cv2.resize(cropped_roi, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+                
+            # Yield ROI BGR
+            variants.append((f"roi_{kind}_{idx}", cropped_roi, scale, scale, px1, py1, None))
+            
+            # Yield ROI Grayscale
+            if len(cropped_roi.shape) == 3:
+                roi_gray = cv2.cvtColor(cropped_roi, cv2.COLOR_BGR2GRAY)
+            else:
+                roi_gray = cropped_roi.copy()
+            variants.append((f"roi_{kind}_{idx}_gray", roi_gray, scale, scale, px1, py1, None))
+            
+            # Yield ROI CLAHE
+            if clahe is not None:
+                try:
+                    roi_clahe = clahe.apply(roi_gray)
+                    variants.append((f"roi_{kind}_{idx}_clahe", roi_clahe, scale, scale, px1, py1, None))
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"[Vision2] Failed to process candidate ROI variant {idx}: {e}")
+
+    return variants
+
+
+def _vision2_detect_qrcode(image_np):
+    records = []
+    seen_codes = set()
+
+    def _add_record(text, pts, decoder_name, scale_x=1.0, scale_y=1.0, offset_x=0, offset_y=0, M_inv=None):
+        if not text:
+            return
+        code_text = str(text).strip()
+        if not code_text or code_text in seen_codes:
+            return
+        bbox = None
+        if pts is not None:
+            try:
+                pts_arr = np.array(pts, dtype=np.float32).reshape(-1, 2)
+                
+                # Transform rotated coordinates back first if applicable
+                if M_inv is not None:
+                    pts_reshaped = pts_arr.reshape(-1, 1, 2)
+                    pts_orig = cv2.transform(pts_reshaped, M_inv)
+                    pts_arr = pts_orig.reshape(-1, 2)
+                    
+                if M_inv is None:
+                    x1 = int(np.min(pts_arr[:, 0]) / scale_x + offset_x)
+                    y1 = int(np.min(pts_arr[:, 1]) / scale_y + offset_y)
+                    x2 = int(np.max(pts_arr[:, 0]) / scale_x + offset_x)
+                    y2 = int(np.max(pts_arr[:, 1]) / scale_y + offset_y)
+                else:
+                    x1 = int(np.min(pts_arr[:, 0]))
+                    y1 = int(np.min(pts_arr[:, 1]))
+                    x2 = int(np.max(pts_arr[:, 0]))
+                    y2 = int(np.max(pts_arr[:, 1]))
+                    
+                bbox = [x1, y1, x2, y2]
+            except Exception:
+                pass
+        seen_codes.add(code_text)
+        records.append({
+            "kind": "qrcode",
+            "code": code_text,
+            "bbox": bbox,
+            "confidence": 1.0,
+            "decoder": decoder_name
+        })
+
+    # Get preprocessed variants
+    variants = _vision2_get_image_variants(image_np)
+
+    # 1. Primary: Try PyZbar on all variants
+    try:
+        from pyzbar.pyzbar import decode as pyzbar_decode
+        for var_name, variant, scale_x, scale_y, offset_x, offset_y, M_inv in variants:
+            decoded_items = pyzbar_decode(variant)
+            for item in decoded_items:
+                item_type = str(item.type).upper()
+                if item_type != "QRCODE":
+                    continue
+                code_text = item.data.decode("utf-8", errors="ignore").strip()
+                if not code_text or code_text in seen_codes:
+                    continue
+                x, y, w, h = item.rect
+                
+                # Transform points back to original image coordinates
+                pts = [[x, y], [x + w, y], [x + w, y + h], [x, y + h]]
+                pts_arr = np.array(pts, dtype=np.float32).reshape(-1, 2)
+                
+                if M_inv is not None:
+                    pts_reshaped = pts_arr.reshape(-1, 1, 2)
+                    pts_orig = cv2.transform(pts_reshaped, M_inv)
+                    pts_arr = pts_orig.reshape(-1, 2)
+                    x1 = int(np.min(pts_arr[:, 0]))
+                    y1 = int(np.min(pts_arr[:, 1]))
+                    x2 = int(np.max(pts_arr[:, 0]))
+                    y2 = int(np.max(pts_arr[:, 1]))
+                else:
+                    x1 = int(x / scale_x + offset_x)
+                    y1 = int(y / scale_y + offset_y)
+                    x2 = int((x + w) / scale_x + offset_x)
+                    y2 = int((y + h) / scale_y + offset_y)
+                    
+                bbox = [x1, y1, x2, y2]
+                seen_codes.add(code_text)
+                records.append({
+                    "kind": "qrcode",
+                    "code": code_text,
+                    "bbox": bbox,
+                    "confidence": 1.0,
+                    "decoder": f"pyzbar_{var_name}"
+                })
+    except Exception as e:
+        print(f"[Vision2] pyzbar qrcode fallback unavailable or failed: {e}")
+
+    if records:
+        return records
+
+    # 2. Secondary: Try OpenCV WeChat QR Code Detector
+    try:
+        wechat_detector = cv2.wechat_qrcode.WeChatQRCode()
+        for var_name, variant, scale_x, scale_y, offset_x, offset_y, M_inv in variants:
+            if len(variant.shape) == 2:
+                variant_bgr = cv2.cvtColor(variant, cv2.COLOR_GRAY2BGR)
+            else:
+                variant_bgr = variant
+            res, points = wechat_detector.detectAndDecode(variant_bgr)
+            if res:
+                for text, quad in zip(res, points):
+                    _add_record(text, quad, f"wechat_{var_name}", scale_x, scale_y, offset_x, offset_y, M_inv)
+            if records:
+                return records
+    except Exception as e:
+        print(f"[Vision2] WeChat QR Code detector failed or unavailable: {e}")
+
+    # 3. Fallback: Try standard OpenCV QRCodeDetector (Multi)
+    try:
+        opencv_detector = cv2.QRCodeDetector()
+        for var_name, variant, scale_x, scale_y, offset_x, offset_y, M_inv in variants:
+            retval, decoded_info, points, _ = opencv_detector.detectAndDecodeMulti(variant)
+            if retval and points is not None and decoded_info is not None:
+                for text, quad in zip(decoded_info, points):
+                    _add_record(text, quad, f"opencv_multi_{var_name}", scale_x, scale_y, offset_x, offset_y, M_inv)
+            if records:
+                return records
+    except Exception:
+        pass
+
+    # 4. Fallback: Try standard OpenCV QRCodeDetector (Single)
+    try:
+        opencv_detector = cv2.QRCodeDetector()
+        for var_name, variant, scale_x, scale_y, offset_x, offset_y, M_inv in variants:
+            text, pts, _ = opencv_detector.detectAndDecode(variant)
+            _add_record(text, pts, f"opencv_single_{var_name}", scale_x, scale_y, offset_x, offset_y, M_inv)
+            if records:
+                return records
+    except Exception:
+        pass
+
+    return records
+
+
+def _vision2_detect_barcode_with_pyzbar(image_np):
+    records = []
+    seen_codes = set()
+
+    def _add_record(text, pts, decoder_name, scale_x=1.0, scale_y=1.0, offset_x=0, offset_y=0, M_inv=None, code_type="barcode"):
+        if not text:
+            return
+        code_text = str(text).strip()
+        if not code_text or code_text in seen_codes:
+            return
+        bbox = None
+        if pts is not None:
+            try:
+                pts_arr = np.array(pts, dtype=np.float32).reshape(-1, 2)
+                if M_inv is not None:
+                    pts_reshaped = pts_arr.reshape(-1, 1, 2)
+                    pts_orig = cv2.transform(pts_reshaped, M_inv)
+                    pts_arr = pts_orig.reshape(-1, 2)
+                    x1 = int(np.min(pts_arr[:, 0]))
+                    y1 = int(np.min(pts_arr[:, 1]))
+                    x2 = int(np.max(pts_arr[:, 0]))
+                    y2 = int(np.max(pts_arr[:, 1]))
+                else:
+                    x1 = int(np.min(pts_arr[:, 0]) / scale_x + offset_x)
+                    y1 = int(np.min(pts_arr[:, 1]) / scale_y + offset_y)
+                    x2 = int(np.max(pts_arr[:, 0]) / scale_x + offset_x)
+                    y2 = int(np.max(pts_arr[:, 1]) / scale_y + offset_y)
+                bbox = [x1, y1, x2, y2]
+            except Exception:
+                pass
+        seen_codes.add(code_text)
+        records.append({
+            "kind": "barcode",
+            "code": code_text,
+            "code_type": code_type,
+            "bbox": bbox,
+            "confidence": 1.0,
+            "decoder": decoder_name
+        })
+
+    # Get preprocessed variants
+    variants = _vision2_get_image_variants(image_np)
+
+    # 1. Primary: Try PyZbar on all variants
+    try:
+        from pyzbar.pyzbar import decode as pyzbar_decode
+        for var_name, variant, scale_x, scale_y, offset_x, offset_y, M_inv in variants:
+            decoded_items = pyzbar_decode(variant)
+            for item in decoded_items:
+                item_type = str(item.type).upper()
+                if item_type == "QRCODE":
+                    continue
+                code_text = item.data.decode("utf-8", errors="ignore").strip()
+                if not code_text or code_text in seen_codes:
+                    continue
+                x, y, w, h = item.rect
+                
+                # Transform points back to original image coordinates
+                pts = [[x, y], [x + w, y], [x + w, y + h], [x, y + h]]
+                pts_arr = np.array(pts, dtype=np.float32).reshape(-1, 2)
+                
+                if M_inv is not None:
+                    pts_reshaped = pts_arr.reshape(-1, 1, 2)
+                    pts_orig = cv2.transform(pts_reshaped, M_inv)
+                    pts_arr = pts_orig.reshape(-1, 2)
+                    x1 = int(np.min(pts_arr[:, 0]))
+                    y1 = int(np.min(pts_arr[:, 1]))
+                    x2 = int(np.max(pts_arr[:, 0]))
+                    y2 = int(np.max(pts_arr[:, 1]))
+                else:
+                    x1 = int(x / scale_x + offset_x)
+                    y1 = int(y / scale_y + offset_y)
+                    x2 = int((x + w) / scale_x + offset_x)
+                    y2 = int((y + h) / scale_y + offset_y)
+                    
+                bbox = [x1, y1, x2, y2]
+                seen_codes.add(code_text)
+                records.append({
+                    "kind": "barcode",
+                    "code": code_text,
+                    "code_type": item_type,
+                    "bbox": bbox,
+                    "confidence": 1.0,
+                    "decoder": f"pyzbar_{var_name}"
+                })
+    except Exception as e:
+        print(f"[Vision2] pyzbar barcode detection failed or unavailable: {e}")
+
+    if records:
+        return records
+
+    # 2. Secondary: Try OpenCV BarcodeDetector (Multi) as fallback
+    try:
+        barcode_detector = cv2.barcode.BarcodeDetector()
+        for var_name, variant, scale_x, scale_y, offset_x, offset_y, M_inv in variants:
+            retval, decoded_info, points, format_types = barcode_detector.detectAndDecodeMulti(variant)
+            if retval and points is not None and decoded_info is not None:
+                for text, quad, fmt in zip(decoded_info, points, format_types):
+                    _add_record(text, quad, f"opencv_barcode_multi_{var_name}", scale_x, scale_y, offset_x, offset_y, M_inv, code_type=str(fmt))
+            if records:
+                return records
+    except Exception as e:
+        print(f"[Vision2] OpenCV BarcodeDetector Multi failed or unavailable: {e}")
+
+    # 3. Fallback: Try OpenCV BarcodeDetector (Single) as fallback
+    try:
+        barcode_detector = cv2.barcode.BarcodeDetector()
+        for var_name, variant, scale_x, scale_y, offset_x, offset_y, M_inv in variants:
+            retval, points, format_type = barcode_detector.detect(variant)
+            if retval and points is not None:
+                text, points, format_type = barcode_detector.decode(variant, points)
+                if text:
+                    _add_record(text, points, f"opencv_barcode_single_{var_name}", scale_x, scale_y, offset_x, offset_y, M_inv, code_type=str(format_type))
+            if records:
+                return records
+    except Exception as e:
+        print(f"[Vision2] OpenCV BarcodeDetector Single failed or unavailable: {e}")
+
+    return records
+
+
+def _vision2_detect_codes(image_np, include_qrcode=True, include_barcode=True):
+    t0_qr = time.time()
+    qr_records = _vision2_detect_qrcode(image_np) if include_qrcode else []
+    t1_qr = time.time()
+
+    t0_bar = time.time()
+    barcode_records = _vision2_detect_barcode_with_pyzbar(image_np) if include_barcode else []
+    t1_bar = time.time()
+
+    seen = set()
+    merged = []
+    for rec in qr_records + barcode_records:
+        key = (rec.get("kind"), rec.get("code"))
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(rec)
+
+    return {
+        "qrcode": qr_records,
+        "barcode": barcode_records,
+        "all_codes": merged,
+        "counts": {
+            "qrcode": len(qr_records),
+            "barcode": len(barcode_records),
+            "total": len(merged)
+        },
+        "timings_ms": {
+            "qrcode_detection_ms": round((t1_qr - t0_qr) * 1000, 2),
+            "barcode_detection_ms": round((t1_bar - t0_bar) * 1000, 2)
+        }
+    }
+
+
+def _vision2_reference_detect(image_pil, threshold=0.75, target_label=None):
+    image_rgb = image_pil.convert("RGB")
+    image_cv = cv2.cvtColor(np.array(image_rgb), cv2.COLOR_RGB2BGR)
+
+    active_labels = []
+    if os.path.exists(REFVISION_REF_DIR):
+        active_labels = [d for d in os.listdir(REFVISION_REF_DIR) if os.path.isdir(os.path.join(REFVISION_REF_DIR, d))]
+
+    if not active_labels:
+        return {
+            "success": False,
+            "error": "No reference labels available"
+        }
+
+    for label in active_labels:
+        update_label_embeddings(REFVISION_DATA_DIR, label)
+
+    candidate_boxes, debug_info = detect_candidate_crops(image_cv)
+    raw_detections = match_candidates(
+        image_rgb,
+        candidate_boxes,
+        REFVISION_DATA_DIR,
+        active_labels,
+        threshold=threshold,
+        target_label=target_label
+    )
+    filtered_detections = filter_duplicate_detections(raw_detections, iou_threshold=0.45)
+
+    counts = {}
+    labels = []
+    for det in filtered_detections:
+        lbl = det.get("label", "unknown")
+        labels.append(lbl)
+        if lbl != "unknown":
+            counts[lbl] = counts.get(lbl, 0) + 1
+
+    return {
+        "success": True,
+        "active_labels": active_labels,
+        "counts": counts,
+        "detections": filtered_detections,
+        "labels": labels,
+        "debug": {
+            "proposals_count": debug_info.get("raw_contour_proposals", 0),
+            "merged_contour_count": debug_info.get("merged_contour_proposals", 0),
+            "using_fallback_grid": debug_info.get("using_fallback_grid", False),
+            "final_analyzed_candidates": len(candidate_boxes)
+        }
+    }
+
+
+def _vision2_attach_db_metadata(codes_payload):
+    barcode_db = _vision2_load_db(VISION2_BARCODE_DB_PATH)
+    qrcode_db = _vision2_load_db(VISION2_QRCODE_DB_PATH)
+
+    barcode_map = {str(r.get("code", "")).strip(): r for r in barcode_db.get("records", [])}
+    qrcode_map = {str(r.get("code", "")).strip(): r for r in qrcode_db.get("records", [])}
+
+    all_codes = []
+    for rec in codes_payload.get("all_codes", []):
+        code = str(rec.get("code", "")).strip()
+        db_hit = None
+        if rec.get("kind") == "barcode":
+            db_hit = barcode_map.get(code)
+        elif rec.get("kind") == "qrcode":
+            db_hit = qrcode_map.get(code)
+
+        all_codes.append({
+            **rec,
+            "db_record": db_hit
+        })
+
+    codes_payload["all_codes"] = all_codes
+    codes_payload["matched_in_db"] = sum(1 for r in all_codes if r.get("db_record") is not None)
+    return codes_payload
+
+
+def _vision2_extract_code_from_upload(image_file, expected_kind=None):
+    if image_file is None:
+        return None, [], []
+
+    try:
+        image_file.stream.seek(0)
+    except Exception:
+        pass
+    image_pil = Image.open(image_file.stream).convert("RGB")
+
+    # Server-side resize check: limit long edge to 1000px
+    try:
+        w, h = image_pil.size
+        long_edge = max(w, h)
+        if long_edge > 1000:
+            scale = 1000.0 / long_edge
+            try:
+                resample_method = Image.Resampling.LANCZOS
+            except AttributeError:
+                try:
+                    resample_method = Image.LANCZOS
+                except AttributeError:
+                    resample_method = Image.ANTIALIAS
+            image_pil = image_pil.resize((int(w * scale), int(h * scale)), resample_method)
+    except Exception as e:
+        print(f"[Vision2] Server-side resize in extract upload failed: {e}")
+
+    image_np = cv2.cvtColor(np.array(image_pil), cv2.COLOR_RGB2BGR)
+    detected = _vision2_detect_codes(image_np)
+    all_codes = detected.get("all_codes", [])
+
+    if expected_kind:
+        filtered = [item for item in all_codes if item.get("kind") == expected_kind]
+    else:
+        filtered = all_codes
+
+    code_value = filtered[0].get("code") if filtered else None
+    return code_value, filtered, all_codes
+
+
+def _vision2_model_understanding(image_pil, keyword_tags, enable_model_keyword_check=True, enable_ocr_check=True):
+    """
+    Use loaded Florence-2 model to build semantic context (caption + optional OCR)
+    and perform keyword matching against model-generated content.
+    """
+    if not enable_model_keyword_check:
+        return {
+            "enabled": False,
+            "available": True,
+            "reason": "model_keyword_check_disabled",
+            "caption": None,
+            "ocr": None,
+            "matched_keywords": [],
+            "keyword_details": []
+        }
+
+    if skip_model_load or processor is None or model is None:
+        return {
+            "enabled": True,
+            "available": False,
+            "reason": "model_not_loaded",
+            "caption": None,
+            "ocr": None,
+            "matched_keywords": [],
+            "keyword_details": []
+        }
+
+    caption_text = None
+    ocr_text = None
+    keyword_details = []
+
+    try:
+        caption_text = run_model(image_pil.copy(), "<MORE_DETAILED_CAPTION>", max_tokens=180)
+    except Exception as e:
+        caption_text = f"[caption_error] {e}"
+
+    if enable_ocr_check:
+        try:
+            ocr_text = run_model(image_pil.copy(), "<OCR_WITH_REGION>", max_tokens=260)
+        except Exception as e:
+            ocr_text = f"[ocr_error] {e}"
+
+    corpus_parts = [caption_text or ""]
+    if enable_ocr_check:
+        corpus_parts.append(ocr_text or "")
+    corpus = "\n".join(corpus_parts).lower()
+
+    corpus_tokens = re.findall(r"[a-z0-9_\-]+", corpus)
+    matched_keywords = []
+
+    for kw in keyword_tags:
+        kw_l = str(kw).strip().lower()
+        if not kw_l:
+            continue
+
+        direct_match = kw_l in corpus
+        token_match = all(token in corpus for token in kw_l.split()) if kw_l.split() else False
+        best_fuzzy = 0.0
+        best_token = None
+
+        for token in corpus_tokens:
+            score = SequenceMatcher(None, kw_l, token).ratio()
+            if score > best_fuzzy:
+                best_fuzzy = score
+                best_token = token
+
+        fuzzy_match = best_fuzzy >= 0.82
+        is_match = direct_match or token_match or fuzzy_match
+        if is_match:
+            matched_keywords.append(kw_l)
+
+        keyword_details.append({
+            "keyword": kw_l,
+            "matched": is_match,
+            "match_type": (
+                "direct" if direct_match else
+                "token" if token_match else
+                "fuzzy" if fuzzy_match else
+                "none"
+            ),
+            "best_fuzzy_score": round(best_fuzzy, 4),
+            "best_fuzzy_token": best_token
+        })
+
+    return {
+        "enabled": True,
+        "available": True,
+        "reason": None,
+        "caption": caption_text,
+        "ocr": ocr_text,
+        "matched_keywords": sorted(list(set(matched_keywords))),
+        "keyword_details": keyword_details,
+        "ocr_check_enabled": bool(enable_ocr_check)
+    }
 
 # ===== Flask API =====
 app = Flask(__name__, static_folder="ai_object_identification/static", template_folder="templates")
@@ -597,6 +1456,19 @@ def image_to_base64(image_np):
         base64 encoded string
     """
     import base64
+    if image_np is not None:
+        try:
+            h, w = image_np.shape[:2]
+            long_edge = max(h, w)
+            max_dim = 480
+            if long_edge > max_dim:
+                scale = max_dim / float(long_edge)
+                new_w = int(w * scale)
+                new_h = int(h * scale)
+                image_np = cv2.resize(image_np, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        except Exception as e:
+            print(f"[Vision2] Resizing annotated image failed: {e}")
+            
     _, buffer = cv2.imencode('.jpg', image_np)
     base64_image = base64.b64encode(buffer).decode('utf-8')
     return base64_image
@@ -1425,6 +2297,11 @@ def api_snapshot():
 def refvision_home():
     return render_template("refvision.html")
 
+
+@app.route("/vision2")
+def vision2_home():
+    return render_template("vision2.html")
+
 # Route: Serving Static Files from the RefVision Data Folder
 @app.route("/data/<path:filename>")
 def serve_data(filename):
@@ -1677,6 +2554,257 @@ def recognize():
             "final_analyzed_candidates": len(candidate_boxes)
         }
     }), 200
+
+
+@app.route("/vision2/api/analyze", methods=["POST"])
+def vision2_api_analyze():
+    """
+    One-shot camera analysis for Vision2 user flow:
+    1) Reference-based object detection
+    2) Hand pose + grasp detection
+    3) Barcode / QR-code detection
+    """
+    try:
+        if "image" not in request.files:
+            return jsonify({"success": False, "error": "No image field provided"}), 400
+
+        image_file = request.files["image"]
+        image_pil = Image.open(image_file.stream).convert("RGB")
+
+        # Server-side resize check: limit long edge to 1000px
+        try:
+            w, h = image_pil.size
+            long_edge = max(w, h)
+            if long_edge > 1000:
+                scale = 1000.0 / long_edge
+                try:
+                    resample_method = Image.Resampling.LANCZOS
+                except AttributeError:
+                    try:
+                        resample_method = Image.LANCZOS
+                    except AttributeError:
+                        resample_method = Image.ANTIALIAS
+                image_pil = image_pil.resize((int(w * scale), int(h * scale)), resample_method)
+        except Exception as e:
+            print(f"[Vision2] Server-side resize in analyze API failed: {e}")
+
+        image_np = cv2.cvtColor(np.array(image_pil), cv2.COLOR_RGB2BGR)
+
+        try:
+            threshold = float(request.form.get("threshold", 0.75))
+        except Exception:
+            threshold = 0.75
+
+        target_label = str(request.form.get("target_label", "")).strip()
+        if target_label in ("", "all"):
+            target_label = None
+
+        raw_keywords = str(request.form.get("keywords", "")).strip()
+        keyword_tags = [k.strip().lower() for k in raw_keywords.split(",") if k.strip()]
+
+        model_keyword_check = str(request.form.get("model_keyword_check", "1")).strip().lower() not in ("0", "false", "no")
+        ocr_check = str(request.form.get("ocr_check", "1")).strip().lower() not in ("0", "false", "no")
+        ref_object_check = str(request.form.get("ref_object_check", "1")).strip().lower() not in ("0", "false", "no")
+        hand_check = str(request.form.get("hand_check", "1")).strip().lower() not in ("0", "false", "no")
+        code_check = str(request.form.get("code_check", "1")).strip().lower() not in ("0", "false", "no")
+        raw_qrcode_check = request.form.get("qrcode_check")
+        raw_barcode_check = request.form.get("barcode_check")
+        qrcode_check = (
+            (str(raw_qrcode_check).strip().lower() not in ("0", "false", "no"))
+            if raw_qrcode_check is not None else code_check
+        )
+        barcode_check = (
+            (str(raw_barcode_check).strip().lower() not in ("0", "false", "no"))
+            if raw_barcode_check is not None else code_check
+        )
+        code_check = qrcode_check or barcode_check
+
+        t0 = time.time()
+        performance = {}
+
+        if ref_object_check:
+            t_ref0 = time.time()
+            reference_result = _vision2_reference_detect(image_pil, threshold=threshold, target_label=target_label)
+            performance["reference_detection_ms"] = round((time.time() - t_ref0) * 1000, 2)
+        else:
+            reference_result = {"success": False, "reason": "disabled", "counts": {}, "detections": [], "labels": []}
+            performance["reference_detection_ms"] = 0.0
+
+        if hand_check:
+            t_hand0 = time.time()
+            hand_result = detect_hand_pose(image_pil)
+            performance["hand_tracking_ms"] = round((time.time() - t_hand0) * 1000, 2)
+        else:
+            hand_result = {"success": False, "reason": "disabled", "hands_detected": 0, "objects_detected": [], "grasped_objects": []}
+            performance["hand_tracking_ms"] = 0.0
+
+        if code_check:
+            t_code0 = time.time()
+            code_result = _vision2_attach_db_metadata(
+                _vision2_detect_codes(image_np, include_qrcode=qrcode_check, include_barcode=barcode_check)
+            )
+            performance["code_detection_ms"] = round((time.time() - t_code0) * 1000, 2)
+            timings = code_result.get("timings_ms", {})
+            performance["qrcode_detection_ms"] = timings.get("qrcode_detection_ms", 0.0)
+            performance["barcode_detection_ms"] = timings.get("barcode_detection_ms", 0.0)
+        else:
+            code_result = {
+                "success": False,
+                "reason": "disabled",
+                "all_codes": [],
+                "counts": {"qrcode": 0, "barcode": 0, "total": 0},
+                "timings_ms": {"qrcode_detection_ms": 0.0, "barcode_detection_ms": 0.0}
+            }
+            performance["code_detection_ms"] = 0.0
+            performance["qrcode_detection_ms"] = 0.0
+            performance["barcode_detection_ms"] = 0.0
+
+        t_model0 = time.time()
+        model_understanding = _vision2_model_understanding(
+            image_pil,
+            keyword_tags,
+            enable_model_keyword_check=model_keyword_check,
+            enable_ocr_check=ocr_check
+        )
+        performance["model_understanding_ms"] = round((time.time() - t_model0) * 1000, 2)
+
+        detected_terms = []
+        if reference_result.get("success"):
+            detected_terms.extend([str(lbl).lower() for lbl in reference_result.get("labels", [])])
+        detected_terms.extend([str(c.get("code", "")).lower() for c in code_result.get("all_codes", [])])
+
+        if hand_result.get("success"):
+            for obj in hand_result.get("objects_detected", []):
+                detected_terms.append(str(obj.get("category", "")).lower())
+
+        matched_keywords = [kw for kw in keyword_tags if any(kw in term for term in detected_terms)]
+        keyword_counter = Counter([kw for kw in keyword_tags if kw in matched_keywords])
+
+        model_matched = model_understanding.get("matched_keywords", []) if model_understanding else []
+        combined_keyword_matches = sorted(list(set(matched_keywords + model_matched)))
+
+        return jsonify({
+            "success": True,
+            "elapsed": time.time() - t0,
+            "performance": {
+                **performance,
+                "total_elapsed_ms": round((time.time() - t0) * 1000, 2)
+            },
+            "input": {
+                "threshold": threshold,
+                "target_label": target_label,
+                "keyword_tags": keyword_tags,
+                "model_keyword_check": model_keyword_check,
+                "ocr_check": ocr_check,
+                "ref_object_check": ref_object_check,
+                "hand_check": hand_check,
+                "code_check": code_check,
+                "qrcode_check": qrcode_check,
+                "barcode_check": barcode_check
+            },
+            "user_view": {
+                "reference_detection": reference_result,
+                "hand_tracking": hand_result,
+                "code_detection": code_result,
+                "keyword_tags": {
+                    "requested": keyword_tags,
+                    "matched": combined_keyword_matches,
+                    "matched_count": len(combined_keyword_matches),
+                    "detector_only_matched": matched_keywords,
+                    "model_matched": model_matched,
+                    "detector_only_matched_count": sum(keyword_counter.values())
+                },
+                "model_understanding": model_understanding,
+                "ocr_check": {
+                    "enabled": ocr_check,
+                    "text": model_understanding.get("ocr") if model_understanding else None
+                }
+            },
+            "editor_summary": {
+                "barcode_db_records": len(_vision2_load_db(VISION2_BARCODE_DB_PATH).get("records", [])),
+                "qrcode_db_records": len(_vision2_load_db(VISION2_QRCODE_DB_PATH).get("records", []))
+            }
+        }), 200
+
+    except Exception as e:
+        import traceback
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
+
+
+@app.route("/vision2/api/db/<kind>", methods=["GET", "POST", "DELETE"])
+def vision2_api_db(kind):
+    """CRUD for barcode/qrcode JSON databases."""
+    try:
+        kind_norm, db_path = _vision2_db_by_kind(kind)
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+
+    if request.method == "GET":
+        db = _vision2_load_db(db_path)
+        return jsonify({"success": True, "kind": kind_norm, "db": db}), 200
+
+    if request.method == "POST":
+        if request.files or request.form:
+            payload = {
+                "code": str(request.form.get("code", "")).strip(),
+                "name": str(request.form.get("name", "")).strip(),
+                "code_number": str(request.form.get("code_number", "")).strip(),
+                "simple_description": str(request.form.get("simple_description", "")).strip(),
+                "description": str(request.form.get("description", "")).strip()
+            }
+            image_file = request.files.get("image")
+            detected_items = []
+            if image_file and not payload["code"]:
+                detected_code, detected_items, all_detected_items = _vision2_extract_code_from_upload(image_file, expected_kind=kind_norm)
+                if detected_code:
+                    payload["code"] = detected_code
+                elif all_detected_items:
+                    first_detected = all_detected_items[0]
+                    detected_kind = first_detected.get("kind")
+                    detected_code_value = first_detected.get("code")
+                    return jsonify({
+                        "success": False,
+                        "error": f"Detected {detected_kind} in uploaded image, but current type is {kind_norm}",
+                        "detected_items": all_detected_items,
+                        "suggested_kind": detected_kind,
+                        "detected_code": detected_code_value
+                    }), 400
+            if image_file and not payload["code"]:
+                return jsonify({
+                    "success": False,
+                    "error": f"No {kind_norm} detected in uploaded image",
+                    "detected_items": detected_items,
+                    "suggested_kind": None,
+                    "detected_code": None
+                }), 400
+        else:
+            payload = request.get_json(silent=True) or {}
+            detected_items = []
+        try:
+            saved = _vision2_upsert_record(db_path, kind_norm, payload)
+            return jsonify({
+                "success": True,
+                "kind": kind_norm,
+                "record": saved,
+                "detected_items": detected_items
+            }), 200
+        except ValueError as e:
+            return jsonify({"success": False, "error": str(e)}), 400
+
+    code = request.args.get("code", "")
+    if not code:
+        body = request.get_json(silent=True) or {}
+        code = str(body.get("code", "")).strip()
+
+    if not code:
+        return jsonify({"success": False, "error": "'code' is required for delete"}), 400
+
+    removed = _vision2_delete_record(db_path, code)
+    return jsonify({"success": True, "kind": kind_norm, "removed": removed, "code": code}), 200
 
 if __name__ == "__main__":
     # Pre-warm models on startup

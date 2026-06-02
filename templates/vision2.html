@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vision2 Unified Camera</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="/static/vision2.css?v=20260602d">
+</head>
+
+<body>
+    <div class="bg-grid"></div>
+    <main class="shell">
+        <header class="hero">
+            <h1>Vision2 Unified Camera</h1>
+            <p>One camera. One shot. Multi-engine analysis.</p>
+            <div class="hero-actions">
+                <a class="link-btn" href="/">Back to Vision AI Agent</a>
+                <a class="link-btn" href="/refvision">Open RefVision</a>
+            </div>
+        </header>
+
+        <section class="tabs">
+            <button class="tab active" data-tab="user">Part1 User</button>
+            <button class="tab" data-tab="editor">Part2 Editor</button>
+        </section>
+
+        <section id="tab-user" class="panel active">
+            <div class="card">
+                <h2>Single Camera Analyze</h2>
+                <p class="hint">Take one photo, then run reference object detection, hand tracking and barcode/QR
+                    detection.</p>
+
+                <div class="grid2">
+                    <label>
+                        Take Photo (Camera)
+                        <input id="userImageCamera" type="file" accept="image/*" capture="environment">
+                    </label>
+                    <label>
+                        Choose Photo (Album)
+                        <input id="userImageAlbum" type="file" accept="image/*">
+                    </label>
+                    <label>
+                        Keyword Tags (comma)
+                        <input id="keywords" type="text" placeholder="chair, wrench, box-12">
+                    </label>
+                    <label>
+                        Ref Threshold
+                        <input id="threshold" type="number" min="0.6" max="0.95" step="0.01" value="0.75">
+                    </label>
+                    <label>
+                        Target Label (optional)
+                        <input id="targetLabel" type="text" placeholder="all labels if empty">
+                    </label>
+                    <label>
+                        Model Keyword Check
+                        <select id="modelKeywordCheck">
+                            <option value="1" selected>Enabled</option>
+                            <option value="0">Disabled</option>
+                        </select>
+                    </label>
+                    <label>
+                        OCR Check
+                        <select id="ocrCheck">
+                            <option value="1" selected>Enabled</option>
+                            <option value="0">Disabled</option>
+                        </select>
+                    </label>
+                    <label>
+                        Ref Object Check
+                        <select id="refObjectCheck">
+                            <option value="1" selected>Enabled</option>
+                            <option value="0">Disabled</option>
+                        </select>
+                    </label>
+                    <label>
+                        QRCode Check
+                        <select id="qrcodeCheck">
+                            <option value="1" selected>Enabled</option>
+                            <option value="0">Disabled</option>
+                        </select>
+                    </label>
+                    <label>
+                        Barcode Check
+                        <select id="barcodeCheck">
+                            <option value="1" selected>Enabled</option>
+                            <option value="0">Disabled</option>
+                        </select>
+                    </label>
+                </div>
+
+                <button id="analyzeBtn" class="btn-primary">Analyze Unified Result</button>
+
+                <div class="preview-wrap">
+                    <img id="preview" alt="preview" />
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>Result Summary</h2>
+                <div id="summary" class="chips"></div>
+                <div id="readableSummary" class="readable-summary">
+                    <div class="readable-title">Readable Result</div>
+                    <div class="readable-body">Run analyze to see a human-friendly summary here.</div>
+                </div>
+                <pre id="resultJson" class="mono" style="display: none;"></pre>
+            </div>
+        </section>
+
+        <section id="tab-editor" class="panel">
+            <div class="card">
+                <h2>Object Reference Manager</h2>
+                <div class="grid2">
+                    <label>
+                        New Label
+                        <input id="newRefLabel" type="text" placeholder="e.g. screwdriver">
+                    </label>
+                    <div class="row-actions">
+                        <button id="createRefBtn" class="btn-secondary">Create Label</button>
+                    </div>
+                    <label>
+                        Upload To Label
+                        <select id="refLabelSelect"></select>
+                    </label>
+                    <label>
+                        Reference Images
+                        <input id="refFiles" type="file" accept="image/*" multiple>
+                    </label>
+                </div>
+                <button id="uploadRefBtn" class="btn-primary">Upload Reference Images</button>
+                <div id="refList" class="list"></div>
+            </div>
+
+            <div class="card">
+                <h2>Barcode / QRCode Database (JSON)</h2>
+                <div class="db-manager-layout">
+                    <!-- Left: Form -->
+                    <div class="db-form-column">
+                        <div class="grid2" style="margin-top: 10px;">
+                            <label>
+                                Type
+                                <select id="dbType">
+                                    <option value="barcode">Barcode</option>
+                                    <option value="qrcode">QRCode</option>
+                                </select>
+                            </label>
+                            <label>
+                                Code
+                                <input id="dbCode" type="text"
+                                    placeholder="raw code text, or leave blank if uploading image">
+                            </label>
+                            <label>
+                                QR / Barcode Image (Camera)
+                                <input id="dbImageCamera" type="file" accept="image/*" capture="environment">
+                            </label>
+                            <label>
+                                QR / Barcode Image (Album)
+                                <input id="dbImageAlbum" type="file" accept="image/*">
+                            </label>
+                            <label>
+                                Name
+                                <input id="dbName" type="text" placeholder="item name">
+                            </label>
+                            <label>
+                                Code Number
+                                <input id="dbCodeNumber" type="text" placeholder="internal number">
+                            </label>
+                            <label>
+                                Simple Description
+                                <input id="dbSimple" type="text" placeholder="short description">
+                            </label>
+                            <label style="grid-column: span 2;">
+                                Description
+                                <input id="dbDesc" type="text" placeholder="long description">
+                            </label>
+                        </div>
+                        <div class="row-actions" style="margin-top: 14px;">
+                            <button id="saveDbBtn" class="btn-primary">Save / Update</button>
+                            <button id="reloadDbBtn" class="btn-secondary">Reload DB</button>
+                            <button id="clearDbFormBtn" class="btn-secondary" style="background:#475569;">Clear
+                                Form</button>
+                            <button id="deleteDbBtn" class="btn-danger">Delete by Code</button>
+                        </div>
+                        <div class="helper-note" style="margin-top: 12px;">You can paste a code manually, or upload a
+                            QR/barcode image and let the server decode it automatically.</div>
+                    </div>
+
+                    <!-- Right: List -->
+                    <div class="db-list-column">
+                        <div class="db-list-header">
+                            <h3>Records List (<span id="dbRecordCount">0</span>)</h3>
+                            <input id="dbSearch" type="text" placeholder="Filter items..."
+                                style="padding: 6px 10px; font-size: 13px; border-radius: 8px;">
+                        </div>
+                        <div id="dbRecordsList" class="db-records-list">
+                            <!-- Loaded items will go here -->
+                        </div>
+                    </div>
+                </div>
+
+                <details style="margin-top: 16px; border-top: 1px solid var(--line); padding-top: 12px;">
+                    <summary style="cursor: pointer; font-size: 13px; color: var(--muted); font-weight: 600;">Show Raw
+                        DB JSON</summary>
+                    <pre id="dbJson" class="mono"></pre>
+                </details>
+            </div>
+        </section>
+    </main>
+
+    <script src="/static/vision2.js?v=20260602f"></script>
+</body>
+
+</html>
