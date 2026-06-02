@@ -922,6 +922,74 @@ def _vision2_attach_db_metadata(codes_payload):
     return codes_payload
 
 
+def _vision2_parse_local_decoded(source):
+    """Normalize local barcode/QR decode payload from request form/json."""
+    if source is None:
+        return None
+
+    text = str(source.get("local_decoded_text", "")).strip()
+    if not text:
+        return None
+
+    raw_kind = str(source.get("local_decoded_kind", "")).strip().lower()
+    if raw_kind in ("qr", "qr_code"):
+        kind = "qrcode"
+    elif raw_kind in ("barcode", "qrcode"):
+        kind = raw_kind
+    else:
+        kind = "unknown"
+
+    return {
+        "code": text,
+        "kind": kind,
+        "code_type": str(source.get("local_decoded_format", "") or "unknown").strip(),
+        "decoder": str(source.get("local_decoded_engine", "") or "local").strip(),
+        "polygon": [],
+        "center": None,
+        "source": "local"
+    }
+
+
+def _vision2_merge_local_code_result(codes_payload, local_rec, include_qrcode=True, include_barcode=True):
+    """Merge local-decoded code into server detections (dedupe by kind+code)."""
+    if not local_rec:
+        return codes_payload
+
+    kind = local_rec.get("kind")
+    if kind == "qrcode" and not include_qrcode:
+        return codes_payload
+    if kind == "barcode" and not include_barcode:
+        return codes_payload
+
+    all_codes = list(codes_payload.get("all_codes", []))
+    code_text = str(local_rec.get("code", "")).strip()
+    if not code_text:
+        return codes_payload
+
+    existed = any(
+        str(rec.get("code", "")).strip() == code_text and
+        str(rec.get("kind", "")).strip().lower() == str(kind).strip().lower()
+        for rec in all_codes
+    )
+
+    if existed:
+        return codes_payload
+
+    all_codes.append(local_rec)
+    codes_payload["all_codes"] = all_codes
+
+    counts = dict(codes_payload.get("counts", {}))
+    counts.setdefault("qrcode", 0)
+    counts.setdefault("barcode", 0)
+    if kind == "qrcode":
+        counts["qrcode"] = int(counts.get("qrcode", 0)) + 1
+    elif kind == "barcode":
+        counts["barcode"] = int(counts.get("barcode", 0)) + 1
+    counts["total"] = int(counts.get("qrcode", 0)) + int(counts.get("barcode", 0))
+    codes_payload["counts"] = counts
+    return codes_payload
+
+
 def _vision2_extract_code_from_upload(image_file, expected_kind=None):
     if image_file is None:
         return None, [], []
@@ -2297,6 +2365,12 @@ def api_snapshot():
 def refvision_home():
     return render_template("refvision.html")
 
+# Route: Serve RefVision Homepage
+@app.route("/localscanner")
+def localscanner_home():
+    return render_template("local_scanner.html")
+
+
 
 @app.route("/vision2")
 def vision2_home():
@@ -2618,6 +2692,7 @@ def vision2_api_analyze():
             if raw_barcode_check is not None else code_check
         )
         code_check = qrcode_check or barcode_check
+        local_decoded = _vision2_parse_local_decoded(request.form)
 
         t0 = time.time()
         performance = {}
@@ -2640,9 +2715,14 @@ def vision2_api_analyze():
 
         if code_check:
             t_code0 = time.time()
-            code_result = _vision2_attach_db_metadata(
-                _vision2_detect_codes(image_np, include_qrcode=qrcode_check, include_barcode=barcode_check)
+            code_result = _vision2_detect_codes(image_np, include_qrcode=qrcode_check, include_barcode=barcode_check)
+            code_result = _vision2_merge_local_code_result(
+                code_result,
+                local_decoded,
+                include_qrcode=qrcode_check,
+                include_barcode=barcode_check
             )
+            code_result = _vision2_attach_db_metadata(code_result)
             performance["code_detection_ms"] = round((time.time() - t_code0) * 1000, 2)
             timings = code_result.get("timings_ms", {})
             performance["qrcode_detection_ms"] = timings.get("qrcode_detection_ms", 0.0)
@@ -2700,7 +2780,8 @@ def vision2_api_analyze():
                 "hand_check": hand_check,
                 "code_check": code_check,
                 "qrcode_check": qrcode_check,
-                "barcode_check": barcode_check
+                "barcode_check": barcode_check,
+                "local_decoded": local_decoded
             },
             "user_view": {
                 "reference_detection": reference_result,
@@ -2756,6 +2837,21 @@ def vision2_api_db(kind):
                 "simple_description": str(request.form.get("simple_description", "")).strip(),
                 "description": str(request.form.get("description", "")).strip()
             }
+            local_decoded = _vision2_parse_local_decoded(request.form)
+            if not payload["code"] and local_decoded:
+                payload["code"] = str(local_decoded.get("code", "")).strip()
+
+            if local_decoded and local_decoded.get("kind") in ("barcode", "qrcode"):
+                local_kind = local_decoded.get("kind")
+                if local_kind != kind_norm:
+                    return jsonify({
+                        "success": False,
+                        "error": f"Detected {local_kind} from local decode, but current type is {kind_norm}",
+                        "detected_items": [local_decoded],
+                        "suggested_kind": local_kind,
+                        "detected_code": local_decoded.get("code")
+                    }), 400
+
             image_file = request.files.get("image")
             detected_items = []
             if image_file and not payload["code"]:

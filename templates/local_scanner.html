@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Local Barcode Scanner</title>
+
+<style>
+body{
+    margin:20px;
+    font-family:Arial;
+    background:#111;
+    color:white;
+    font-size:40px;
+}
+
+video{
+    width:100%;
+    max-width:800px;
+    border-radius:12px;
+    border:2px solid #444;
+}
+
+#output{
+    margin-top:15px;
+    padding:15px;
+    min-height:100px;
+    background:#222;
+    border-radius:10px;
+    white-space:pre-wrap;
+    font-family:monospace;
+}
+
+.status{
+    color:#00ff88;
+}
+
+#savePanel{
+    margin-top:15px;
+    display:flex;
+    gap:10px;
+}
+
+#itemName{
+    flex:1;
+    padding:10px;
+    font-size:20px;
+}
+
+#saveBtn{
+    padding:10px 20px;
+    font-size:18px;
+}
+
+#history{
+    margin-top:20px;
+    background:#222;
+    border-radius:10px;
+    padding:15px;
+}
+
+.history-item{
+    border-bottom:1px solid #444;
+    padding:10px 0;
+}
+</style>
+</head>
+<body>
+
+<h2>Live Barcode / QR Scanner</h2>
+
+<video id="video" autoplay playsinline></video>
+
+<div id="output">
+Waiting...
+</div>
+
+<div id="savePanel">
+    <input
+        id="itemName"
+        type="text"
+        placeholder="Item Name">
+
+    <button id="saveBtn">
+        Save Name
+    </button>
+</div>
+
+<h3>Detected History</h3>
+
+<div id="history"></div>
+
+<script>
+
+const video = document.getElementById("video");
+const output = document.getElementById("output");
+
+let detector;
+
+async function startCamera()
+{
+    const stream = await navigator.mediaDevices.getUserMedia({
+        video:{
+            facingMode:"environment"
+        }
+    });
+
+    video.srcObject = stream;
+}
+
+async function setupDetector()
+{
+    if(!("BarcodeDetector" in window))
+    {
+        output.innerText =
+            "BarcodeDetector API not supported.";
+        return false;
+    }
+
+    detector = new BarcodeDetector({
+        formats:[
+            "qr_code",
+            "ean_13",
+            "ean_8",
+            "upc_a",
+            "upc_e",
+            "code_128",
+            "code_39",
+            "itf"
+        ]
+    });
+
+    return true;
+}
+
+async function scanLoop()
+{
+    if(video.readyState < 2)
+        return;
+
+    try
+    {
+        const codes = await detector.detect(video);
+
+        if(codes.length)
+        {
+            let txt = "";
+
+            codes.forEach(c =>
+            {
+                txt +=
+                    "Type: " + c.format + "\n" +
+                    "Value: " + c.rawValue + "\n\n";
+            });
+
+            const code = codes[0].rawValue;
+
+            currentCode = code;
+
+            const db = loadDB();
+
+            const name =
+                db[code]?.name || "Unknown";
+
+            output.innerText =
+                "Type: " + codes[0].format +
+                "\nCode: " + code +
+                "\nName: " + name;
+
+            addHistory(code);
+        }
+    }
+    catch(err)
+    {
+        console.log(err);
+    }
+}
+
+(async () =>
+{
+    const ok = await setupDetector();
+
+    if(!ok)
+        return;
+
+    await startCamera();
+
+    setInterval(scanLoop,250);
+})();
+
+let currentCode = null;
+
+const saveBtn =
+    document.getElementById("saveBtn");
+
+const itemName =
+    document.getElementById("itemName");
+
+const historyDiv =
+    document.getElementById("history");
+
+let historySet = new Set();
+
+function loadDB()
+{
+    return JSON.parse(
+        localStorage.getItem("barcodeDB") || "{}"
+    );
+}
+
+function saveDB(db)
+{
+    localStorage.setItem(
+        "barcodeDB",
+        JSON.stringify(db)
+    );
+}
+
+saveBtn.addEventListener("click", () =>
+{
+    if(!currentCode)
+        return;
+
+    const name = itemName.value.trim();
+
+    if(!name)
+        return;
+
+    const db = loadDB();
+
+    db[currentCode] = {
+        name:name
+    };
+
+    saveDB(db);
+
+    itemName.value = "";
+
+    renderHistory();
+});
+
+function addHistory(code)
+{
+    if(historySet.has(code))
+        return;
+
+    historySet.add(code);
+
+    // 存到 LocalStorage
+    localStorage.setItem(
+        "barcodeHistory",
+        JSON.stringify([...historySet])
+    );
+
+    renderHistory();
+}
+
+function renderHistory()
+{
+    const db = loadDB();
+
+    historyDiv.innerHTML = "";
+
+    historySet.forEach(code =>
+    {
+        const div =
+            document.createElement("div");
+
+        div.className =
+            "history-item";
+
+        const name =
+            db[code]?.name || "Unknown";
+
+        div.innerHTML =
+            "<b>"+code+"</b><br>"+name;
+
+        historyDiv.appendChild(div);
+    });
+}
+</script>
+
+</body>
+</html>

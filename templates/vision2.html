@@ -104,10 +104,14 @@
             <div class="card">
                 <h2>Result Summary</h2>
                 <div id="summary" class="chips"></div>
+
+                <div id="localCodeHint" class="helper-note" style="margin-top:10px;"></div>
+
                 <div id="readableSummary" class="readable-summary">
                     <div class="readable-title">Readable Result</div>
                     <div class="readable-body">Run analyze to see a human-friendly summary here.</div>
                 </div>
+
                 <pre id="resultJson" class="mono" style="display: none;"></pre>
             </div>
         </section>
@@ -210,9 +214,13 @@
                 </details>
             </div>
         </section>
+
     </main>
 
-    <script src="/static/vision2.js?v=20260602f"></script>
+        <div id="reader-temp" style="display:none;"></div>
+        <script src="https://unpkg.com/html5-qrcode/html5-qrcode.min.js"></script>
+        <script src="/static/vision2.js?v=20260602h"></script>
+
 </body>
 
 </html>
