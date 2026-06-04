@@ -1,283 +1,1390 @@
 <!DOCTYPE html>
-<html>
+<html lang="zh-TW">
 <head>
 <meta charset="utf-8">
-<title>Local Barcode Scanner</title>
-
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Barcode Scanner</title>
+<link rel="manifest" href="manifest.json">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Scanner">
+<link rel="apple-touch-icon" href="icon.png">
+<meta name="theme-color" content="#0a0a0f">
 <style>
-body{
-    margin:20px;
-    font-family:Arial;
-    background:#111;
-    color:white;
-    font-size:40px;
-}
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Syne:wght@400;700;800&display=swap');
 
-video{
-    width:100%;
-    max-width:800px;
-    border-radius:12px;
-    border:2px solid #444;
-}
+  :root {
+    --bg: #0a0a0f;
+    --surface: #13131a;
+    --surface2: #1c1c27;
+    --accent: #00e5a0;
+    --accent2: #7c6fff;
+    --text: #f0f0f8;
+    --muted: #6b6b88;
+    --border: #2a2a3d;
+    --danger: #ff5566;
+    --tab-h: 64px;
+  }
 
-#output{
-    margin-top:15px;
-    padding:15px;
-    min-height:100px;
-    background:#222;
-    border-radius:10px;
-    white-space:pre-wrap;
-    font-family:monospace;
-}
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
 
-.status{
-    color:#00ff88;
-}
+  html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Syne', sans-serif;
+    overscroll-behavior: none;
+  }
 
-#savePanel{
-    margin-top:15px;
-    display:flex;
-    gap:10px;
-}
+  #app {
+    display: flex;
+    flex-direction: column;
+    height: 100dvh;
+  }
 
-#itemName{
-    flex:1;
-    padding:10px;
-    font-size:20px;
-}
+  /* ── Header ── */
+  #header {
+    padding: 14px 18px 10px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    background: var(--bg);
+  }
+  #header .logo {
+    width: 32px; height: 32px;
+    background: var(--accent);
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #header h1 { font-size: 18px; font-weight: 800; letter-spacing: -0.02em; }
+  #header .badge {
+    margin-left: auto;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--accent);
+    background: rgba(0,229,160,0.1);
+    border: 1px solid rgba(0,229,160,0.25);
+    border-radius: 20px;
+    padding: 3px 10px;
+  }
 
-#saveBtn{
-    padding:10px 20px;
-    font-size:18px;
-}
+  .page {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    display: none;
+    padding-bottom: 12px;
+  }
+  .page.active { display: block; }
 
-#history{
-    margin-top:20px;
-    background:#222;
-    border-radius:10px;
-    padding:15px;
-}
+  /* ── Video area ── */
+  #videoWrap {
+    position: relative;
+    width: 100%;
+    background: #000;
+    overflow: hidden;
+  }
+  #videoWrap video {
+    width: 100%;
+    display: block;
+    object-fit: cover;
+    max-height: 48dvh;
+  }
+  /* Top area layout: order lists row above the video */
+  #topArea { display:flex; flex-direction:column; gap:12px; align-items:stretch; padding:0 14px; }
+  #videoWrap { flex: 1 1 auto; }
+  .order-lists-row { display:block; gap:10px; align-items:flex-start; padding:10px; overflow:auto; }
+  .order-card { width:100%; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding:12px; cursor:default; }
+  .order-card img { width:100%; height:80px; object-fit:cover; border-radius:8px; display:block; }
+  .order-card .items { margin-top:8px; }
+  .order-card .order-item { display:flex; justify-content:space-between; gap:12px; align-items:center; padding:4px 0; border-top:1px dashed rgba(255,255,255,0.02); }
+  .order-card .order-item .iname { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text); }
+  .order-card .order-item .iqty { color:var(--muted); font-family:'JetBrains Mono', monospace; }
+  .order-card .meta { font-size:12px; color:var(--muted); margin-top:6px; }
+  @media (max-width: 860px) {
+    #topArea { padding:0 12px; }
+    .order-card { min-width:110px; }
+  }
+  /* OpenCV overlay canvas — sits exactly over the video */
+  #cvOverlay {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+    z-index: 4;
+  }
 
-.history-item{
-    border-bottom:1px solid #444;
-    padding:10px 0;
-}
+  /* Corner brackets */
+  #videoWrap::before, #videoWrap::after,
+  #vcorner2::before, #vcorner2::after {
+    content: '';
+    position: absolute;
+    width: 28px; height: 28px;
+    border-color: var(--accent);
+    border-style: solid;
+    z-index: 2;
+  }
+  #videoWrap::before { top: 12px; left: 12px; border-width: 3px 0 0 3px; border-radius: 4px 0 0 0; }
+  #videoWrap::after  { top: 12px; right: 12px; border-width: 3px 3px 0 0; border-radius: 0 4px 0 0; }
+  #vcorner2::before  { bottom: 12px; left: 12px; border-width: 0 0 3px 3px; border-radius: 0 0 0 4px; }
+  #vcorner2::after   { bottom: 12px; right: 12px; border-width: 0 3px 3px 0; border-radius: 0 0 4px 0; }
+
+  /* Scan line */
+  #scanLine {
+    position: absolute;
+    left: 20px; right: 20px;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    box-shadow: 0 0 10px var(--accent);
+    z-index: 3;
+    animation: scanAnim 2s ease-in-out infinite;
+    top: 50%;
+  }
+  @keyframes scanAnim {
+    0%   { top: 20%; opacity: 0; }
+    10%  { opacity: 1; }
+    90%  { opacity: 1; }
+    100% { top: 80%; opacity: 0; }
+  }
+
+  /* ── OpenCV status strip ── */
+  #cvStatus {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 14px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+    flex-shrink: 0;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+  #cvStatus .cv-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--muted);
+    flex-shrink: 0;
+    transition: background .3s;
+  }
+  #cvStatus .cv-dot.ready  { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+  #cvStatus .cv-dot.active { background: var(--accent2); box-shadow: 0 0 6px var(--accent2); }
+  #cvStatus .cv-dot.error  { background: var(--danger); }
+
+  .cv-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 20px;
+    font-size: 10px;
+    border: 1px solid;
+    flex-shrink: 0;
+  }
+  .cv-chip-shelf  { color: #00e5a0; border-color: rgba(0,229,160,.3); background: rgba(0,229,160,.08); }
+  .cv-chip-price  { color: #ffd060; border-color: rgba(255,208,96,.3);  background: rgba(255,208,96,.08); }
+  .cv-chip-custom { color: var(--accent2); border-color: rgba(124,111,255,.3); background: rgba(124,111,255,.08); }
+
+  /* ── Shelf toggle button ── */
+  #shelfToggleBtn {
+    margin-left: auto;
+    flex-shrink: 0;
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    color: var(--muted);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    padding: 3px 10px;
+    cursor: pointer;
+    transition: all .2s;
+  }
+  #shelfToggleBtn.on {
+    color: var(--accent2);
+    border-color: rgba(124,111,255,.5);
+    background: rgba(124,111,255,.1);
+  }
+
+  /* ── Result card ── */
+  #resultCard {
+    margin: 12px 14px 0;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 14px 16px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    line-height: 1.7;
+    min-height: 72px;
+    color: #ccc;
+    transition: border-color 0.2s;
+  }
+  #resultCard.active-scan { border-color: var(--accent); }
+  #resultCard .code-val { color: var(--text); font-weight: 700; font-size: 15px; }
+  #resultCard .name-val { color: var(--accent); }
+  #resultCard img { border-radius: 8px; margin-bottom: 8px; display: block; max-height: 80px; }
+
+  /* ── Input section ── */
+  #inputSection {
+    margin: 12px 14px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .field-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+    margin-bottom: 4px;
+  }
+  #itemName {
+    width: 100%;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    color: var(--text);
+    font-family: 'Syne', sans-serif;
+    font-size: 17px;
+    padding: 14px 16px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  #itemName:focus { border-color: var(--accent2); }
+  #itemName::placeholder { color: var(--muted); }
+
+  .row-btns { display: flex; gap: 10px; }
+
+  .btn {
+    flex: 1;
+    border: none;
+    border-radius: 12px;
+    font-family: 'Syne', sans-serif;
+    font-weight: 700;
+    font-size: 16px;
+    padding: 15px 10px;
+    cursor: pointer;
+    transition: opacity .15s, transform .1s;
+    letter-spacing: 0.01em;
+  }
+  .btn:active { transform: scale(0.97); opacity: .85; }
+  .btn:disabled { opacity: .4; cursor: not-allowed; transform: none; }
+  .btn-primary  { background: var(--accent);   color: #000; }
+  .btn-secondary{ background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+  .btn-accent2  { background: var(--accent2);  color: #fff; }
+
+  .checkbox-row {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 14px; color: var(--muted);
+  }
+  .checkbox-row input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--accent2); }
+
+  /* ── Bottom Tab Bar ── */
+  #tabBar {
+    height: var(--tab-h);
+    flex-shrink: 0;
+    display: flex;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+  }
+  .tab-btn {
+    flex: 1;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 4px;
+    background: none; border: none;
+    cursor: pointer;
+    color: var(--muted);
+    font-family: 'Syne', sans-serif;
+    font-size: 11px; font-weight: 700;
+    letter-spacing: .04em; text-transform: uppercase;
+    transition: color .15s;
+    position: relative;
+  }
+  .tab-btn svg { width: 22px; height: 22px; stroke: currentColor; fill: none; stroke-width: 1.8; }
+  .tab-btn.active { color: var(--accent); }
+  .tab-btn.active::before {
+    content: ''; position: absolute;
+    top: 0; left: 20%; right: 20%;
+    height: 2px; background: var(--accent);
+    border-radius: 0 0 4px 4px;
+  }
+  .tab-badge {
+    position: absolute;
+    top: 8px; right: calc(50% - 18px);
+    background: var(--danger); color: #fff;
+    font-size: 10px; font-family: 'JetBrains Mono', monospace;
+    border-radius: 20px; padding: 1px 5px;
+    min-width: 16px; text-align: center;
+    display: none;
+  }
+  .tab-badge.show { display: block; }
+
+  /* ── History page ── */
+  #histPage { padding: 14px; }
+  #histPage h2 { font-size: 20px; font-weight: 800; margin-bottom: 12px; }
+  #clearBtn {
+    display: flex; align-items: center; gap: 6px;
+    background: none; border: 1px solid var(--danger);
+    color: var(--danger); font-family: 'Syne', sans-serif;
+    font-size: 13px; font-weight: 700;
+    border-radius: 8px; padding: 7px 14px;
+    cursor: pointer; margin-bottom: 16px;
+  }
+  .hist-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 14px; padding: 14px 16px;
+    margin-bottom: 10px; display: flex; align-items: center; gap: 14px;
+    animation: fadeUp .25s ease both;
+  }
+  @keyframes fadeUp { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:translateY(0)} }
+  .hist-thumb { width: 56px; height: 56px; border-radius: 10px; object-fit: cover; flex-shrink: 0; }
+  .hist-thumb-placeholder {
+    width: 56px; height: 56px; border-radius: 10px;
+    background: var(--surface2); border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  }
+  .hist-thumb-placeholder svg { width: 24px; height: 24px; stroke: var(--muted); fill: none; }
+  .hist-info { flex: 1; min-width: 0; }
+  .hist-name { font-size: 16px; font-weight: 700; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .hist-code { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .hist-del { background: none; border: none; color: var(--muted); cursor: pointer; padding: 6px; flex-shrink: 0; }
+  .hist-del:active { color: var(--danger); }
+  .hist-del svg { width: 18px; height: 18px; stroke: currentColor; fill: none; }
+
+  #emptyState { text-align: center; padding: 60px 20px; color: var(--muted); }
+  #emptyState svg { width: 48px; height: 48px; stroke: var(--muted); fill: none; margin-bottom: 14px; opacity: .5; }
+  #emptyState p { font-size: 14px; }
+
+  /* Toast */
+  #toast {
+    position: fixed;
+    bottom: calc(var(--tab-h) + 16px);
+    left: 50%; transform: translateX(-50%) translateY(20px);
+    background: var(--accent); color: #000;
+    font-family: 'Syne', sans-serif; font-weight: 700; font-size: 14px;
+    padding: 10px 20px; border-radius: 30px;
+    opacity: 0; transition: opacity .2s, transform .2s;
+    pointer-events: none; z-index: 100; white-space: nowrap;
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  /* ── Menu ── */
+  #menuBtn {
+    margin-left: auto;
+    display: flex; align-items: center; justify-content: center;
+    width: 36px; height: 36px;
+    background: none; border: none; color: var(--muted);
+    cursor: pointer; border-radius: 8px; flex-shrink: 0;
+    transition: color .15s, background .15s;
+  }
+  #menuBtn:active { background: var(--surface2); color: var(--text); }
+  #menuBtn svg { width: 22px; height: 22px; }
+
+  #menuOverlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.5);
+    z-index: 200; opacity: 0; pointer-events: none; transition: opacity .25s;
+  }
+  #menuOverlay.open { opacity: 1; pointer-events: all; }
+  #menuDrawer {
+    position: fixed; top: 0; right: 0; bottom: 0;
+    width: min(280px,80vw); background: var(--surface);
+    border-left: 1px solid var(--border); z-index: 201;
+    display: flex; flex-direction: column;
+    transform: translateX(100%);
+    transition: transform .28s cubic-bezier(.4,0,.2,1);
+  }
+  #menuDrawer.open { transform: translateX(0); }
+  #menuHeader {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 18px 18px 14px; border-bottom: 1px solid var(--border);
+  }
+  #menuHeader span { font-size: 16px; font-weight: 800; letter-spacing: -.01em; }
+  #menuCloseBtn { background: none; border: none; color: var(--muted); cursor: pointer; padding: 4px; border-radius: 6px; }
+  #menuCloseBtn svg { width: 20px; height: 20px; stroke: currentColor; fill: none; }
+  .menu-section { padding: 14px 18px 6px; font-size: 10px; text-transform: uppercase; letter-spacing: .12em; color: var(--muted); }
+  .menu-item {
+    display: flex; align-items: center; gap: 14px;
+    padding: 14px 18px; cursor: pointer;
+    transition: background .15s; border: none; background: none;
+    width: 100%; color: var(--text);
+    font-family: 'Syne', sans-serif; font-size: 15px; font-weight: 600; text-align: left;
+  }
+  .menu-item:active { background: var(--surface2); }
+  .menu-item .menu-icon {
+    width: 38px; height: 38px; border-radius: 10px;
+    background: var(--surface2); border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  }
+  .menu-item .menu-icon svg { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 1.8; }
+  .menu-item .menu-icon.accent  { background: rgba(0,229,160,.1);    border-color: rgba(0,229,160,.3);    color: var(--accent); }
+  .menu-item .menu-icon.accent2 { background: rgba(124,111,255,.12); border-color: rgba(124,111,255,.3);  color: var(--accent2); }
+  .menu-item-sub { font-size: 12px; color: var(--muted); font-weight: 400; display: block; margin-top: 1px; }
+
+  #iosInstructions {
+    margin: 6px 14px 14px;
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 12px; padding: 14px;
+    font-size: 13px; line-height: 1.7; color: #ccc; display: none;
+  }
+  #iosInstructions.show { display: block; }
+  #iosInstructions ol { padding-left: 18px; }
+  #iosInstructions li { margin-bottom: 4px; }
+  #iosInstructions .ios-icon {
+    display: inline-block; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 4px;
+    padding: 1px 5px; font-family: 'JetBrains Mono', monospace;
+    font-size: 12px; color: var(--accent);
+  }
+
+  /* ── Shelf Rules page ── */
+  #rulesPage { padding: 14px; }
+  #rulesPage h2 { font-size: 20px; font-weight: 800; margin-bottom: 4px; }
+  #rulesPage .subtitle { font-size: 13px; color: var(--muted); margin-bottom: 16px; }
+  .rule-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 14px; padding: 14px 16px; margin-bottom: 10px;
+  }
+  .rule-card-header { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .rule-color-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+  .rule-name { font-size: 15px; font-weight: 700; }
+  .rule-toggle {
+    margin-left: auto; background: none;
+    border: 1px solid var(--border); border-radius: 20px;
+    color: var(--muted); font-family: 'JetBrains Mono', monospace;
+    font-size: 10px; padding: 3px 10px; cursor: pointer;
+  }
+  .rule-toggle.on { color: var(--accent); border-color: rgba(0,229,160,.4); background: rgba(0,229,160,.08); }
+  .rule-detail { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--muted); line-height: 1.8; }
+  .rule-chip {
+    display: inline-block; padding: 1px 8px; border-radius: 10px;
+    font-size: 10px; border: 1px solid var(--border);
+    background: var(--surface2); margin: 2px 2px 0 0;
+  }
+  /* ── Location info (left / center / right) ── */
+  .location-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    justify-content: space-between;
+    padding: 6px 10px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 700;
+    font-size: 14px;
+  }
+  .location-info .rack { text-align: left; flex: 0 0 auto;  }
+  .location-info .row  { text-align: center; flex: 1 1 auto; }
+  .location-info .box  { text-align: right; flex: 0 0 auto; background-color:green }
 </style>
 </head>
 <body>
 
-<h2>Live Barcode / QR Scanner</h2>
+<div id="app">
 
-<video id="video" autoplay playsinline></video>
-
-<div id="output">
-Waiting...
-</div>
-
-<div id="savePanel">
-    <input
-        id="itemName"
-        type="text"
-        placeholder="Item Name">
-
-    <button id="saveBtn">
-        Save Name
+  <!-- Header -->
+  <div id="header">
+    <div class="logo">
+      <img src="icon.png" width="100%">
+    </div>
+    <h1>Scanner</h1>
+    <span class="badge" id="statusBadge" style="margin-left:auto;">READY</span>
+    <button id="menuBtn" aria-label="Menu">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <circle cx="12" cy="5"  r="1.2" fill="currentColor"/>
+        <circle cx="12" cy="12" r="1.2" fill="currentColor"/>
+        <circle cx="12" cy="19" r="1.2" fill="currentColor"/>
+      </svg>
     </button>
+  </div>
+
+  <!-- Page: Scan -->
+  <div class="page active" id="scanPage">
+
+    <!-- Top area: Order lists row above the video -->
+    <div id="topArea">
+      <div id="orderLists" class="order-lists-row" aria-label="Saved order lists"></div>
+      <div id="videoWrap">
+        <video id="video" autoplay playsinline muted></video>
+        <canvas id="cvOverlay"></canvas>
+        <div id="vcorner2"></div>
+        <div id="scanLine"></div>
+      </div>
+    </div>
+
+    <!-- OpenCV status strip -->
+    <div id="cvStatus">
+      <div class="cv-dot" id="cvDot"></div>
+      <span id="cvLabel">Loading OpenCV…</span>
+      <button id="shelfToggleBtn" class="on">SHELF ON</button>
+    </div>
+
+    <div id="resultCard">
+      <span style="color:var(--muted); font-size:13px;">Point camera at a barcode or QR code…</span>
+    </div>
+
+    <div id="inputSection">
+      <div>
+        <div class="field-label">Item Name</div>
+        <input id="itemName" type="text" placeholder="Enter or auto-detect name…">
+      </div>
+      <div class="row-btns">
+        <button class="btn btn-accent2" id="autoBtn">✦ Auto</button>
+        <button class="btn btn-primary" id="saveBtn">Save</button>
+      </div>
+      <div class="checkbox-row">
+        <input id="useModelKeyword" type="checkbox" checked>
+        <label for="useModelKeyword">Model keyword detection</label>
+      </div>
+    </div>
+  </div>
+
+  <!-- Page: History -->
+  <div class="page" id="histPage">
+    <h2>History</h2>
+    <button id="clearBtn">
+      <svg viewBox="0 0 20 20" width="14" height="14" stroke="currentColor" fill="none" stroke-width="2"><polyline points="3 6 5 6 17 6"/><path d="M8 6V4h4v2"/><path d="M19 6l-1 12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2L1 6"/></svg>
+      Clear all
+    </button>
+    <div id="historyDiv"></div>
+    <div id="emptyState" style="display:none">
+      <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 14h3v3"/><path d="M17 17h3"/><path d="M17 14v3"/></svg>
+      <p>No scans yet.<br>Go scan something!</p>
+    </div>
+  </div>
+
+  <!-- Page: Shelf Rules -->
+  <div class="page" id="rulesPage">
+    <h2>Shelf Rules</h2>
+    <p class="subtitle">Toggle rules active on the camera view</p>
+    <div id="rulesList"></div>
+  </div>
+
+</div><!-- /app -->
+
+<!-- Menu -->
+<div id="menuOverlay"></div>
+<div id="menuDrawer">
+  <div id="menuHeader">
+    <span>Menu</span>
+    <button id="menuCloseBtn" aria-label="Close">
+      <svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </button>
+  </div>
+  <div class="menu-section">Install</div>
+  <button class="menu-item" id="menuInstallBtn">
+    <div class="menu-icon accent">
+      <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v13m0 0l-4-4m4 4l4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+    </div>
+    <div>Add to Home Screen<span class="menu-item-sub" id="installSubtext">Install as app</span></div>
+  </button>
+
+
+  <button class="menu-item" id="menuOrderListReaderBtn">
+    <a href="orderlist_reader.html" style="display:flex;align-items:center;gap:14px;color:inherit;text-decoration:none;">
+      <div class="menu-icon accent2">
+        <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="4"/><rect x="3" y="10" width="18" height="4"/><rect x="3" y="16" width="18" height="4"/></svg>
+      </div>
+      Order List Reader<span class="menu-item-sub">Scan order lists with AI</span>
+    </a>
+  </button>
+
+  <button class="menu-item" id="menuOrderListReaderBtn">
+    <a href="shelf_rules_editor.html" style="display:flex;align-items:center;gap:14px;color:inherit;text-decoration:none;">
+      <div class="menu-icon accent2">
+        <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="4"/><rect x="3" y="10" width="18" height="4"/><rect x="3" y="16" width="18" height="4"/></svg>
+      </div>
+      Warehouse Map
+    </a>
+  </button>
+
+
+  <div id="iosInstructions">
+    <ol>
+      <li>Tap the <span class="ios-icon">⎋ Share</span> button in Safari</li>
+      <li>Scroll down and tap <span class="ios-icon">Add to Home Screen</span></li>
+      <li>Tap <span class="ios-icon">Add</span> to confirm</li>
+    </ol>
+  </div>
+  <div class="menu-section">App</div>
+  <button class="menu-item" id="menuAboutBtn">
+    <div class="menu-icon accent2">
+      <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+    </div>
+    <div>About<span class="menu-item-sub">Barcode Scanner v1.0</span></div>
+  </button>
 </div>
 
-<h3>Detected History</h3>
+<!-- Image Modal for order list preview -->
+<div id="imgModal" style="display:none;position:fixed;inset:0;z-index:9999;align-items:center;justify-content:center;">
+  <div id="imgModalBack" style="position:absolute;inset:0;background:rgba(0,0,0,.7);"></div>
+  <img id="imgModalImg" src="" style="max-width:95vw;max-height:90vh;border-radius:10px;box-shadow:0 10px 40px rgba(0,0,0,.6);position:relative;z-index:1000;">
+  <button id="imgModalClose" style="position:fixed;top:18px;right:18px;z-index:1001;background:rgba(0,0,0,.5);color:#fff;border:0;padding:8px 10px;border-radius:8px;">✕</button>
+</div>
 
-<div id="history"></div>
+<!-- Order Detail Modal -->
+<div id="orderModal" style="display:none;position:fixed;inset:0;z-index:9998;align-items:center;justify-content:center;">
+  <div id="orderModalBack" style="position:absolute;inset:0;background:rgba(0,0,0,.6);"></div>
+  <div id="orderModalCard" style="position:relative;z-index:1000;background:var(--surface);border:1px solid var(--border);width:min(920px,95vw);max-height:90vh;border-radius:12px;overflow:auto;padding:14px;">
+    <button id="orderModalClose" style="position:absolute;top:12px;right:12px;background:transparent;border:0;color:var(--muted);font-size:20px;">✕</button>
+    <div id="orderModalHeader" style="font-weight:800;margin-bottom:8px;"></div>
+    <div id="orderModalBody" style="display:flex;gap:12px;align-items:flex-start;">
+      <div style="flex:0 0 320px;max-width:320px;">
+        <img id="orderModalImg" src="" style="width:100%;height:220px;object-fit:cover;border-radius:8px;display:block;margin-bottom:8px;">
+      </div>
+      <div style="flex:1 1 auto;overflow:auto;max-height:65vh;">
+        <div id="orderModalItems"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Tab Bar (3 tabs) -->
+<div id="tabBar">
+  <button class="tab-btn active" data-tab="scanPage">
+    <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+      <rect x="3" y="14" width="7" height="7"/><path d="M14 14h3v3m0 0h3m-3 0v3"/>
+    </svg>Scan
+  </button>
+  <button class="tab-btn" data-tab="histPage">
+    <span class="tab-badge" id="histBadge">0</span>
+    <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="9"/>
+    </svg>History
+  </button>
+  <button class="tab-btn" data-tab="rulesPage">
+    <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 6h18M3 12h12M3 18h8"/>
+      <circle cx="19" cy="17" r="3"/>
+      <path d="M17.5 17l1 1 2-2"/>
+    </svg>Rules
+  </button>
+</div>
+
+<div id="toast"></div>
+
+<!-- Load OpenCV.js (WASM build, ~8 MB, loads async) -->
+<script async src="https://docs.opencv.org/4.9.0/opencv.js" onload="onOpenCvReady()"></script>
 
 <script>
+// ════════════════════════════════════════════════════════════
+// SHELF DETECTOR CONFIG — load from shelf_rules_editor (localStorage)
+// Key used by the editor: 'shelfRules'
+// If not present, fall back to built-in defaults.
+// ════════════════════════════════════════════════════════════
+const STORAGE_KEY_SHELF = 'shelfRules';
 
-const video = document.getElementById("video");
-const output = document.getElementById("output");
+const DEFAULT_SHELF_RULES = [];
 
-let detector;
-
-async function startCamera()
-{
-    const stream = await navigator.mediaDevices.getUserMedia({
-        video:{
-            facingMode:"environment"
-        }
-    });
-
-    video.srcObject = stream;
+function loadShelfRules(){
+  try{
+    const s = localStorage.getItem(STORAGE_KEY_SHELF);
+    if(!s) return JSON.parse(JSON.stringify(DEFAULT_SHELF_RULES));
+    const parsed = JSON.parse(s);
+    if(!Array.isArray(parsed) || parsed.length === 0) return JSON.parse(JSON.stringify(DEFAULT_SHELF_RULES));
+    // Normalize numeric fields (ensure numbers)
+    return parsed.map(r => ({
+      id: r.id,
+      name: r.name || 'Rule',
+      hMin: Number(r.hMin)||0, hMax: Number(r.hMax)||0,
+      sMin: Number(r.sMin)||0, sMax: Number(r.sMax)||0,
+      vMin: Number(r.vMin)||0, vMax: Number(r.vMax)||0,
+      shape: r.shape || 'rect', aspectMin: Number(r.aspectMin)||0.4, aspectMax: Number(r.aspectMax)||4,
+      areaMin: Number(r.areaMin)||0, areaMax: Number(r.areaMax)||100000,
+      label: r.label || r.name || 'Object',
+      color: r.color || '#7c6fff',
+      enabled: typeof r.enabled === 'boolean' ? r.enabled : true
+    }));
+  }catch(e){
+    console.warn('Failed to load shelf rules, using defaults', e);
+    return JSON.parse(JSON.stringify(DEFAULT_SHELF_RULES));
+  }
 }
 
-async function setupDetector()
-{
-    if(!("BarcodeDetector" in window))
-    {
-        output.innerText =
-            "BarcodeDetector API not supported.";
-        return false;
-    }
-
-    detector = new BarcodeDetector({
-        formats:[
-            "qr_code",
-            "ean_13",
-            "ean_8",
-            "upc_a",
-            "upc_e",
-            "code_128",
-            "code_39",
-            "itf"
-        ]
-    });
-
-    return true;
-}
-
-async function scanLoop()
-{
-    if(video.readyState < 2)
-        return;
-
-    try
-    {
-        const codes = await detector.detect(video);
-
-        if(codes.length)
-        {
-            let txt = "";
-
-            codes.forEach(c =>
-            {
-                txt +=
-                    "Type: " + c.format + "\n" +
-                    "Value: " + c.rawValue + "\n\n";
-            });
-
-            const code = codes[0].rawValue;
-
-            currentCode = code;
-
-            const db = loadDB();
-
-            const name =
-                db[code]?.name || "Unknown";
-
-            output.innerText =
-                "Type: " + codes[0].format +
-                "\nCode: " + code +
-                "\nName: " + name;
-
-            addHistory(code);
-        }
-    }
-    catch(err)
-    {
-        console.log(err);
-    }
-}
-
-(async () =>
-{
-    const ok = await setupDetector();
-
-    if(!ok)
-        return;
-
-    await startCamera();
-
-    setInterval(scanLoop,250);
-})();
-
-let currentCode = null;
-
-const saveBtn =
-    document.getElementById("saveBtn");
-
-const itemName =
-    document.getElementById("itemName");
-
-const historyDiv =
-    document.getElementById("history");
-
-let historySet = new Set();
-
-function loadDB()
-{
-    return JSON.parse(
-        localStorage.getItem("barcodeDB") || "{}"
-    );
-}
-
-function saveDB(db)
-{
-    localStorage.setItem(
-        "barcodeDB",
-        JSON.stringify(db)
-    );
-}
-
-saveBtn.addEventListener("click", () =>
-{
-    if(!currentCode)
-        return;
-
-    const name = itemName.value.trim();
-
-    if(!name)
-        return;
-
-    const db = loadDB();
-
-    db[currentCode] = {
-        name:name
-    };
-
-    saveDB(db);
-
-    itemName.value = "";
-
-    renderHistory();
+// Reload rules when changed elsewhere (editor tab) via localStorage
+window.addEventListener('storage', (e) => {
+  if (e.key === STORAGE_KEY_SHELF) {
+    SHELF_RULES = loadShelfRules();
+    cvLabel.textContent = 'OpenCV ready · ' + SHELF_RULES.filter(r=>r.enabled).length + ' rules active';
+    renderRules();
+    // clear overlay immediately when no shelf rules or shelf off
+    if (!shelfOn) ctx.clearRect(0,0,overlay.width,overlay.height);
+  }
 });
 
-function addHistory(code)
-{
-    if(historySet.has(code))
-        return;
-
-    historySet.add(code);
-
-    // 存到 LocalStorage
-    localStorage.setItem(
-        "barcodeHistory",
-        JSON.stringify([...historySet])
-    );
-
-    renderHistory();
+function saveShelfRules(rules){
+  try{ localStorage.setItem(STORAGE_KEY_SHELF, JSON.stringify(rules)); }
+  catch(e){ console.warn('Failed to save shelf rules', e); }
 }
 
-function renderHistory()
-{
-    const db = loadDB();
+let SHELF_RULES = loadShelfRules();
 
-    historyDiv.innerHTML = "";
+// ════════════════════════════════════════════════════════════
+// TAB SWITCHING
+// ════════════════════════════════════════════════════════════
+const tabBtns = document.querySelectorAll('.tab-btn');
+tabBtns.forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    tabBtns.forEach(b => b.classList.remove('active'));
+    document.getElementById(btn.dataset.tab).classList.add('active');
+    btn.classList.add('active');
+    if (btn.dataset.tab === 'histPage')  renderHistory();
+    if (btn.dataset.tab === 'rulesPage') renderRules();
+  });
+});
 
-    historySet.forEach(code =>
-    {
-        const div =
-            document.createElement("div");
+// ════════════════════════════════════════════════════════════
+// TOAST
+// ════════════════════════════════════════════════════════════
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2000);
+}
 
-        div.className =
-            "history-item";
+// ════════════════════════════════════════════════════════════
+// STORAGE
+// ════════════════════════════════════════════════════════════
+function loadDB()      { return JSON.parse(localStorage.getItem('barcodeDB')      || '{}'); }
+function saveDB(db)    { localStorage.setItem('barcodeDB',      JSON.stringify(db)); }
+function loadHistory() { return JSON.parse(localStorage.getItem('barcodeHistory') || '[]'); }
+function saveHistory(a){ localStorage.setItem('barcodeHistory', JSON.stringify(a)); }
 
-        const name =
-            db[code]?.name || "Unknown";
+// ════════════════════════════════════════════════════════════
+// CAMERA + BARCODE SCANNER
+// ════════════════════════════════════════════════════════════
+const video     = document.getElementById('video');
+const resultCard= document.getElementById('resultCard');
+const statusBadge=document.getElementById('statusBadge');
+let barcodeDetector, currentCode = null;
+const CONFIRM_NEEDED = 4;
+let pendingCode = null, pendingFmt = null, pendingCount = 0;
 
-        div.innerHTML =
-            "<b>"+code+"</b><br>"+name;
+async function startCamera() {
+  const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+  video.srcObject = stream;
+}
 
-        historyDiv.appendChild(div);
+async function setupDetector() {
+  if (!('BarcodeDetector' in window)) {
+    resultCard.innerHTML = '<span style="color:var(--danger)">BarcodeDetector not supported.</span>';
+    return false;
+  }
+  barcodeDetector = new BarcodeDetector({
+    formats: ['qr_code','ean_13','ean_8','upc_a','upc_e','code_128','code_39','itf']
+  });
+  return true;
+}
+
+function confirmCode(code, fmt) {
+  const db    = loadDB();
+  const name  = db[code]?.name  || 'Unknown';
+  const thumb = db[code]?.thumb || null;
+  currentCode = code;
+  statusBadge.textContent = 'LOCKED';
+  statusBadge.style.color = 'var(--accent)';
+  resultCard.classList.add('active-scan');
+  resultCard.innerHTML =
+    (thumb ? `<img src="${thumb}" style="max-height:70px;border-radius:8px;margin-bottom:8px;display:block;">` : '') +
+    `<span style="color:var(--muted);font-size:12px;font-family:'JetBrains Mono',monospace;">${fmt.toUpperCase()}</span><br>` +
+    `<span class="code-val">${code}</span><br>` +
+    `<span class="name-val">${name}</span>` +
+    `<div class="location-info">
+          <div class="rack">Rack E</div>
+          <div class="row">Row 3</div>
+          <div class="box greenbox">Box 15</div>
+        </div>`;
+  addHistory(code);
+}
+
+async function barcodeLoop() {
+  if (!barcodeDetector || video.readyState < 2) return;
+  try {
+    const codes = await barcodeDetector.detect(video);
+    if (codes.length) {
+      const code = codes[0].rawValue;
+      const fmt  = codes[0].format;
+      if (code === pendingCode) {
+        pendingCount++;
+        if (pendingCount < CONFIRM_NEEDED) {
+          statusBadge.textContent = `${pendingCount}/${CONFIRM_NEEDED}`;
+          statusBadge.style.color = 'var(--accent2)';
+        }
+      } else {
+        pendingCode = code; pendingFmt = fmt; pendingCount = 1;
+        statusBadge.textContent = `1/${CONFIRM_NEEDED}`;
+        statusBadge.style.color = 'var(--accent2)';
+      }
+      if (pendingCount >= CONFIRM_NEEDED) confirmCode(pendingCode, pendingFmt);
+    } else {
+      pendingCode = null; pendingCount = 0;
+      if (!currentCode) resultCard.classList.remove('active-scan');
+      statusBadge.textContent = currentCode ? 'LOCKED' : 'SCANNING';
+      statusBadge.style.color = '';
+    }
+  } catch(e) { console.warn(e); }
+}
+
+(async () => {
+  const ok = await setupDetector();
+  if (!ok) return;
+  await startCamera();
+  statusBadge.textContent = 'SCANNING';
+  setInterval(barcodeLoop, 250);
+})();
+
+// ════════════════════════════════════════════════════════════
+// OPENCV SHELF DETECTION
+// ════════════════════════════════════════════════════════════
+let cvReady  = false;
+let shelfOn  = true;
+const overlay= document.getElementById('cvOverlay');
+const ctx    = overlay.getContext('2d');
+const cvDot  = document.getElementById('cvDot');
+const cvLabel= document.getElementById('cvLabel');
+
+// Hidden processing canvas (fixed size for speed)
+const procCanvas = document.createElement('canvas');
+procCanvas.width  = 320;
+procCanvas.height = 240;
+const procCtx = procCanvas.getContext('2d', { willReadFrequently: true });
+
+function onOpenCvReady() {
+  // cv is the OpenCV global exposed by opencv.js
+  cvDot.classList.add('ready');
+  cvLabel.textContent = 'OpenCV ready · ' + SHELF_RULES.filter(r=>r.enabled).length + ' rules active';
+  cvReady = true;
+  requestAnimationFrame(shelfLoop);
+}
+
+// Resize overlay to match video display
+function syncOverlay() {
+  const r = video.getBoundingClientRect();
+  if (overlay.width !== r.width || overlay.height !== r.height) {
+    overlay.width  = r.width;
+    overlay.height = r.height;
+  }
+}
+
+// distance label based on area fraction
+function distLabel(area, rule) {
+  const mid = (rule.areaMin + rule.areaMax) / 2;
+  if (area > mid * 1.4) return 'NEAR';
+  if (area < mid * 0.6) return 'FAR';
+  return 'MID';
+}
+
+// hex color → [r,g,b]
+function hexRgb(hex) {
+  const v = parseInt(hex.slice(1), 16);
+  return [(v>>16)&255, (v>>8)&255, v&255];
+}
+
+let shelfDetections = []; // last detections for overlay
+
+function shelfLoop() {
+  requestAnimationFrame(shelfLoop);
+  if (!cvReady || !shelfOn || video.readyState < 2) {
+    ctx.clearRect(0, 0, overlay.width, overlay.height);
+    return;
+  }
+  syncOverlay();
+
+  // Draw video frame into small proc canvas
+  procCtx.drawImage(video, 0, 0, procCanvas.width, procCanvas.height);
+
+  const scaleX = overlay.width  / procCanvas.width;
+  const scaleY = overlay.height / procCanvas.height;
+
+  const detections = [];
+
+  try {
+    // Read frame
+    const src = cv.imread(procCanvas);
+    const hsv = new cv.Mat();
+    cv.cvtColor(src, hsv, cv.COLOR_RGBA2RGB);
+    cv.cvtColor(hsv, hsv, cv.COLOR_RGB2HSV);
+
+    for (const rule of SHELF_RULES) {
+      if (!rule.enabled) continue;
+
+      // Colour mask
+      const lower = new cv.Mat(hsv.rows, hsv.cols, hsv.type(),
+        [rule.hMin, rule.sMin, rule.vMin, 0]);
+      const upper = new cv.Mat(hsv.rows, hsv.cols, hsv.type(),
+        [rule.hMax, rule.sMax, rule.vMax, 255]);
+      const mask = new cv.Mat();
+      cv.inRange(hsv, lower, upper, mask);
+
+      // Morphological close to fill gaps
+      const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
+      cv.morphologyEx(mask, mask, cv.MORPH_CLOSE, kernel);
+      cv.morphologyEx(mask, mask, cv.MORPH_OPEN,  kernel);
+
+      // Find contours
+      const contours = new cv.MatVector();
+      const hierarchy = new cv.Mat();
+      cv.findContours(mask, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+      for (let i = 0; i < contours.size(); i++) {
+        const cnt  = contours.get(i);
+        const area = cv.contourArea(cnt);
+        if (area < rule.areaMin || area > rule.areaMax) { cnt.delete(); continue; }
+
+        // Bounding rect
+        const rect   = cv.boundingRect(cnt);
+        const aspect = rect.width / rect.height;
+        if (aspect < rule.aspectMin || aspect > rule.aspectMax) { cnt.delete(); continue; }
+
+        // Shape filter
+        if (rule.shape === 'rect') {
+          // Check how rectangular it is: area vs bounding box area
+          const boxArea = rect.width * rect.height;
+          const fill    = area / boxArea;
+          if (fill < 0.35) { cnt.delete(); continue; } // too irregular
+        } else if (rule.shape === 'wide') {
+          if (aspect < 1.8) { cnt.delete(); continue; }
+        }
+
+        detections.push({
+          rule,
+          x: rect.x * scaleX,
+          y: rect.y * scaleY,
+          w: rect.width  * scaleX,
+          h: rect.height * scaleY,
+          area,
+          dist: distLabel(area, rule)
+        });
+        cnt.delete();
+      }
+
+      lower.delete(); upper.delete(); mask.delete();
+      kernel.delete(); contours.delete(); hierarchy.delete();
+    }
+
+    src.delete(); hsv.delete();
+  } catch(e) {
+    console.warn('CV error:', e);
+  }
+
+  // ── Draw overlays ──
+  ctx.clearRect(0, 0, overlay.width, overlay.height);
+  for (const d of detections) {
+    const [r, g, b] = hexRgb(d.rule.color);
+    const alpha = 0.85;
+    ctx.save();
+
+    // Bounding box
+    ctx.strokeStyle = d.rule.color;
+    ctx.lineWidth   = 2;
+    ctx.strokeRect(d.x, d.y, d.w, d.h);
+
+    // Corner accents
+    const cs = 12; // corner size
+    ctx.lineWidth = 3;
+    [[d.x,d.y],[d.x+d.w,d.y],[d.x,d.y+d.h],[d.x+d.w,d.y+d.h]].forEach(([cx,cy],idx)=>{
+      const sx = idx%2===0?1:-1, sy = idx<2?1:-1;
+      ctx.beginPath();
+      ctx.moveTo(cx+sx*cs, cy); ctx.lineTo(cx, cy); ctx.lineTo(cx, cy+sy*cs);
+      ctx.stroke();
     });
-}
-</script>
 
+    // Label pill
+    const tag  = `${d.rule.label}  ${d.dist}`;
+    ctx.font   = 'bold 11px JetBrains Mono, monospace';
+    const tw   = ctx.measureText(tag).width;
+    const ph   = 18, pw = tw + 14;
+    const lx   = d.x, ly = d.y - ph - 2;
+    // pill background
+    ctx.fillStyle = `rgba(${r},${g},${b},0.18)`;
+    ctx.beginPath();
+    ctx.roundRect(lx, ly > 0 ? ly : d.y+2, pw, ph, 4);
+    ctx.fill();
+    // pill border
+    ctx.strokeStyle = d.rule.color;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    // text
+    ctx.fillStyle = d.rule.color;
+    ctx.fillText(tag, lx+7, (ly > 0 ? ly : d.y+2) + 13);
+
+    ctx.restore();
+  }
+
+  // Update status dot
+  if (detections.length > 0) {
+    cvDot.classList.remove('ready'); cvDot.classList.add('active');
+  } else {
+    cvDot.classList.remove('active'); cvDot.classList.add('ready');
+  }
+}
+
+// ── Shelf toggle button ──
+const shelfToggleBtn = document.getElementById('shelfToggleBtn');
+shelfToggleBtn.addEventListener('click', () => {
+  shelfOn = !shelfOn;
+  shelfToggleBtn.textContent = shelfOn ? 'SHELF ON' : 'SHELF OFF';
+  shelfToggleBtn.classList.toggle('on', shelfOn);
+  if (!shelfOn) ctx.clearRect(0, 0, overlay.width, overlay.height);
+  cvLabel.textContent = shelfOn ? 'OpenCV ready · ' + SHELF_RULES.filter(r=>r.enabled).length + ' rules active' : 'Shelf detection paused';
+});
+
+// ════════════════════════════════════════════════════════════
+// RULES PAGE
+// ════════════════════════════════════════════════════════════
+function hsvToHslStr(h, s, v) {
+  const ss=s/255, vv=v/255;
+  const l=vv*(1-ss/2);
+  const sl=l===0||l===1?0:(vv-l)/Math.min(l,1-l);
+  return `hsl(${h*2},${Math.round(sl*100)}%,${Math.round(l*100)}%)`;
+}
+
+function renderRules() {
+  const list = document.getElementById('rulesList');
+  list.innerHTML = '';
+  SHELF_RULES.forEach((rule, idx) => {
+    const dotColor = hsvToHslStr((rule.hMin+rule.hMax)/2, 180, 180);
+    const div = document.createElement('div');
+    div.className = 'rule-card';
+    div.innerHTML = `
+      <div class="rule-card-header">
+        <div class="rule-color-dot" style="background:${dotColor}"></div>
+        <span class="rule-name">${rule.name}</span>
+        <button class="rule-toggle ${rule.enabled?'on':''}" data-idx="${idx}">
+          ${rule.enabled ? 'ON' : 'OFF'}
+        </button>
+      </div>
+      <div class="rule-detail">
+        <span class="rule-chip">H ${rule.hMin}–${rule.hMax}</span>
+        <span class="rule-chip">S ${rule.sMin}–${rule.sMax}</span>
+        <span class="rule-chip">V ${rule.vMin}–${rule.vMax}</span>
+        <span class="rule-chip">shape: ${rule.shape}</span>
+        <span class="rule-chip">aspect ${rule.aspectMin}–${rule.aspectMax}</span>
+        <span class="rule-chip">area ${rule.areaMin}–${rule.areaMax}px²</span>
+        <span class="rule-chip">label: ${rule.label}</span>
+      </div>
+    `;
+    div.querySelector('.rule-toggle').addEventListener('click', e => {
+      SHELF_RULES[idx].enabled = !SHELF_RULES[idx].enabled;
+      saveShelfRules(SHELF_RULES);
+      renderRules();
+      cvLabel.textContent = 'OpenCV ready · ' + SHELF_RULES.filter(r=>r.enabled).length + ' rules active';
+    });
+    list.appendChild(div);
+  });
+}
+
+// ════════════════════════════════════════════════════════════
+// SAVE
+// ════════════════════════════════════════════════════════════
+document.getElementById('saveBtn').addEventListener('click', () => {
+  if (!currentCode) { showToast('Scan a barcode first'); return; }
+  const name = document.getElementById('itemName').value.trim();
+  if (!name) { showToast('Enter a name'); return; }
+  const db = loadDB();
+  db[currentCode] = db[currentCode] || {};
+  db[currentCode].name = name;
+  saveDB(db);
+  document.getElementById('itemName').value = '';
+  showToast('Saved ✓');
+  renderHistory();
+});
+
+// ════════════════════════════════════════════════════════════
+// AUTO DETECT
+// ════════════════════════════════════════════════════════════
+function captureFrameAsFile(videoEl) {
+  const canvas = document.createElement('canvas');
+  canvas.width  = videoEl.videoWidth  || 1280;
+  canvas.height = videoEl.videoHeight || 720;
+  canvas.getContext('2d').drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+  return new Promise(res => canvas.toBlob(
+    blob => res(blob ? new File([blob], 'capture.jpg', { type: 'image/jpeg', lastModified: Date.now() }) : null),
+    'image/jpeg', 0.9
+  ));
+}
+async function fileToThumb(file, maxSize=160) {
+  if (!file) return null;
+  try {
+    const img = await createImageBitmap(file);
+    const scale = Math.min(1, maxSize / Math.max(img.width, img.height));
+    const c = document.createElement('canvas');
+    c.width  = Math.round(img.width  * scale);
+    c.height = Math.round(img.height * scale);
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    return c.toDataURL('image/jpeg', 0.8);
+  } catch(e) { return null; }
+}
+
+document.getElementById('autoBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('autoBtn');
+  btn.disabled = true; btn.textContent = '…';
+  try {
+    const file = await captureFrameAsFile(video);
+    if (!file) { showToast('Capture failed'); return; }
+    const fd = new FormData();
+    fd.append('image', file, file.name);
+    fd.append('keywords', '');
+    fd.append('threshold', '0.75');
+    fd.append('target_label', '');
+    fd.append('model_keyword_check', document.getElementById('useModelKeyword').checked ? '1' : '0');
+    fd.append('ocr_check', '0');
+    fd.append('short_name_only', document.getElementById('useModelKeyword').checked ? '1' : '0');
+    fd.append('ref_object_check', '0');
+    fd.append('qrcode_check', '0');
+    fd.append('barcode_check', '0');
+    const res  = await fetch('https://visionai.maxsolo.co.uk/vision2/api/analyze', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok || !data.success) { showToast('Auto failed'); return; }
+    const model  = data.user_view?.model_understanding || {};
+    const kw     = (model.matched_keywords && model.matched_keywords[0]) || null;
+    const ocrTxt = data.user_view?.ocr_check?.text || model.ocr || null;
+    const cap    = model.caption || null;
+    const chosen = kw || (ocrTxt ? String(ocrTxt).split('\n')[0].trim() : null) || (cap ? String(cap).split('\n')[0].trim() : null);
+    if (chosen) {
+      document.getElementById('itemName').value = chosen;
+      const thumb = await fileToThumb(file, 160);
+      if (currentCode) {
+        const db = loadDB();
+        db[currentCode] = db[currentCode] || {};
+        db[currentCode].name = chosen;
+        if (thumb) db[currentCode].thumb = thumb;
+        saveDB(db);
+      }
+      showToast('Auto: ' + chosen);
+    } else { showToast('Nothing detected'); }
+  } catch(e) { showToast('Error'); console.error(e); }
+  finally { btn.disabled = false; btn.textContent = '✦ Auto'; }
+});
+
+// ════════════════════════════════════════════════════════════
+// HISTORY
+// ════════════════════════════════════════════════════════════
+function addHistory(code) {
+  let arr = loadHistory();
+  if (!arr.includes(code)) {
+    arr.unshift(code);
+    saveHistory(arr);
+    updateHistBadge(arr.length);
+  }
+}
+function updateHistBadge(n) {
+  const badge = document.getElementById('histBadge');
+  badge.textContent = n;
+  badge.classList.toggle('show', n > 0);
+}
+function renderHistory() {
+  const div  = document.getElementById('historyDiv');
+  const empty= document.getElementById('emptyState');
+  const arr  = loadHistory();
+  const db   = loadDB();
+  div.innerHTML = '';
+  updateHistBadge(arr.length);
+  if (!arr.length) { empty.style.display = ''; return; }
+  empty.style.display = 'none';
+  arr.forEach(code => {
+    const name  = db[code]?.name  || 'Unknown';
+    const thumb = db[code]?.thumb || null;
+    const card = document.createElement('div');
+    card.className = 'hist-card';
+    card.innerHTML =
+      (thumb
+        ? `<img class="hist-thumb" src="${thumb}">`
+        : `<div class="hist-thumb-placeholder"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 14h3v3m0 0h3m-3 0v3"/></svg></div>`) +
+      `<div class="hist-info">
+         <div class="hist-name">${name}</div>
+         <div class="hist-code">${code}</div>
+       </div>
+       <div class="location-info">
+          <div class="rack">E</div>
+          <div class="row">3</div>
+          <div class="box greenbox">15</div>
+        </div>
+       <button class="hist-del" data-code="${code}">
+         <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
+       </button>`;
+    card.querySelector('.hist-del').addEventListener('click', () => {
+      saveHistory(loadHistory().filter(c => c !== code));
+      renderHistory();
+    });
+    div.appendChild(card);
+  });
+}
+document.getElementById('clearBtn').addEventListener('click', () => {
+  if (confirm('Clear all history?')) { saveHistory([]); renderHistory(); }
+});
+updateHistBadge(loadHistory().length);
+
+  // Load and render the latest saved order list (single) from localStorage
+  function loadOrderLists(){
+    const container = document.getElementById('orderLists');
+    if (!container) return;
+    const lists = JSON.parse(localStorage.getItem('orderLists') || '[]');
+    container.innerHTML = '';
+    if (!lists.length){ container.innerHTML = '<div style="color:var(--muted);padding:8px;">No saved order lists.</div>'; return; }
+    // choose the newest by timestamp (descending)
+    lists.sort((a,b)=> (b.timestamp||0) - (a.timestamp||0));
+    const l = lists[0];
+    const card = document.createElement('div');
+    card.className = 'order-card';
+    const thumb = l.image ? `<img src="${l.image}" alt="order preview">` : `<div class="hist-thumb-placeholder" style="width:100%;height:80px;border-radius:8px;"><svg viewBox="0 0 24 24" width="36" height="36"><rect x="3" y="3" width="18" height="14" rx="2" ry="2" stroke="currentColor" fill="none"></rect><circle cx="8" cy="9" r="1.6" fill="currentColor"></circle></svg></div>`;
+    const items = l.items || [];
+    card.innerHTML = `
+      ${thumb}
+      <div style="font-weight:700;margin-top:6px;">${l.direction ? l.direction.toUpperCase() : 'ORDER'}</div>
+      <div class="meta">${new Date(l.timestamp).toLocaleString()} • ${ items.length } items</div>
+      <div class="items"></div>
+    `;
+    // clicking the card does nothing (list is always visible). clicking thumbnail still opens image modal.
+    if (l.image){
+      const imgEl = card.querySelector('img');
+      if (imgEl) imgEl.addEventListener('click', (ev) => { ev.stopPropagation(); openImageModal(l.image); });
+    }
+    // populate items inline
+    const itemsDiv = card.querySelector('.items');
+    items.forEach(it => {
+      const row = document.createElement('div');
+      row.className = 'order-item';
+      const left = document.createElement('div'); left.style.minWidth = '0';
+      const iname = document.createElement('div'); iname.className = 'iname';
+      const nameText = it.description || it.name || it.text || 'undefined';
+      iname.textContent = nameText;
+      left.appendChild(iname);
+      // second line for linked info (item number and location) when linked exists
+      if (it.linked) {
+        const second = document.createElement('div');
+        second.className = 'second-line';
+        const itemNum = it.linked.code || it.sku || it.orderNo || '';
+        const location = it.pickLocation || '';
+        let parts = [];
+        if (itemNum) parts.push(`Item#: ${itemNum}`);
+        if (location) parts.push(location);
+        second.textContent = parts.join(' • ');
+        second.style.fontSize = '12px'; second.style.color = 'var(--muted)'; second.style.marginTop = '4px';
+        left.appendChild(second);
+      }
+      const iqty = document.createElement('div'); iqty.className = 'iqty'; iqty.textContent = it.qty != null ? String(it.qty) : (it.quantity != null ? String(it.quantity) : '');
+      row.appendChild(left); row.appendChild(iqty);
+      itemsDiv.appendChild(row);
+    });
+    container.appendChild(card);
+  }
+
+function openImageModal(src){
+  const modal = document.getElementById('imgModal');
+  const img = document.getElementById('imgModalImg');
+  img.src = src;
+  modal.style.display = 'flex';
+}
+function closeImageModal(){
+  const modal = document.getElementById('imgModal');
+  const img = document.getElementById('imgModalImg');
+  img.src = '';
+  modal.style.display = 'none';
+}
+document.getElementById('imgModalClose').addEventListener('click', closeImageModal);
+document.getElementById('imgModalBack').addEventListener('click', closeImageModal);
+
+window.addEventListener('storage', (e) => {
+  if (e.key === 'orderLists') loadOrderLists();
+});
+// initial load
+loadOrderLists();
+
+// Order modal open/close and render
+function openOrderModal(list){
+  const modal = document.getElementById('orderModal');
+  const header = document.getElementById('orderModalHeader');
+  const img = document.getElementById('orderModalImg');
+  const itemsDiv = document.getElementById('orderModalItems');
+  header.textContent = `${list.direction ? list.direction.toUpperCase() : 'Order'} • ${new Date(list.timestamp).toLocaleString()}`;
+  if (list.image) { img.src = list.image; img.style.display = 'block'; }
+  else { img.style.display = 'none'; }
+  itemsDiv.innerHTML = '';
+  const items = list.items || [];
+  if (!items.length) itemsDiv.innerHTML = '<div style="color:var(--muted);">No items in this list.</div>';
+  items.forEach((it, idx) => {
+    const row = document.createElement('div');
+    row.style.display = 'flex'; row.style.alignItems='center'; row.style.justifyContent='space-between'; row.style.padding='8px 6px'; row.style.borderBottom='1px solid var(--border)';
+    const left = document.createElement('div'); left.style.minWidth='0';
+    const name = document.createElement('div'); name.style.fontWeight='700'; name.style.color='var(--text)'; name.textContent = it.name || it.text || `Item ${idx+1}`;
+    const meta = document.createElement('div'); meta.style.fontSize='12px'; meta.style.color='var(--muted)'; meta.textContent = (it.qty ? `Qty: ${it.qty}` : '') + (it.code ? ` • ${it.code}` : '');
+    left.appendChild(name); left.appendChild(meta);
+    row.appendChild(left);
+    itemsDiv.appendChild(row);
+  });
+  modal.style.display = 'flex';
+}
+function closeOrderModal(){
+  const modal = document.getElementById('orderModal');
+  const img = document.getElementById('orderModalImg');
+  img.src = '';
+  modal.style.display = 'none';
+}
+document.getElementById('orderModalClose').addEventListener('click', closeOrderModal);
+document.getElementById('orderModalBack').addEventListener('click', closeOrderModal);
+
+// ════════════════════════════════════════════════════════════
+// MENU
+// ════════════════════════════════════════════════════════════
+const menuBtn     = document.getElementById('menuBtn');
+const menuOverlay = document.getElementById('menuOverlay');
+const menuDrawer  = document.getElementById('menuDrawer');
+const menuCloseBtn= document.getElementById('menuCloseBtn');
+function openMenu()  { menuOverlay.classList.add('open');    menuDrawer.classList.add('open'); }
+function closeMenu() { menuOverlay.classList.remove('open'); menuDrawer.classList.remove('open'); }
+menuBtn.addEventListener('click',    openMenu);
+menuCloseBtn.addEventListener('click', closeMenu);
+menuOverlay.addEventListener('click', closeMenu);
+
+// ── PWA install ──
+let deferredPrompt = null;
+const installBtn   = document.getElementById('menuInstallBtn');
+const installSub   = document.getElementById('installSubtext');
+const iosDiv       = document.getElementById('iosInstructions');
+const isIos        = /iphone|ipad|ipod/i.test(navigator.userAgent);
+const isStandalone = ('standalone' in navigator && navigator.standalone) ||
+                      window.matchMedia('(display-mode: standalone)').matches;
+if (isStandalone) {
+  installSub.textContent = 'Already installed ✓';
+  installBtn.style.opacity = '0.5'; installBtn.style.pointerEvents = 'none';
+} else if (isIos) {
+  installSub.textContent = 'Tap for instructions';
+}
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault(); deferredPrompt = e;
+  installSub.textContent = 'Ready to install';
+});
+installBtn.addEventListener('click', async () => {
+  if (isStandalone) return;
+  if (deferredPrompt) {
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    deferredPrompt = null;
+    if (outcome === 'accepted') {
+      installSub.textContent = 'Installed ✓';
+      showToast('App installed!'); closeMenu();
+    }
+  } else if (isIos) {
+    iosDiv.classList.toggle('show');
+  } else {
+    showToast('Open in Chrome/Safari to install');
+  }
+});
+document.getElementById('menuAboutBtn').addEventListener('click', () => {
+  showToast('Barcode Scanner v1.0'); closeMenu();
+});
+</script>
 </body>
 </html>

@@ -72,6 +72,10 @@ VISION2_BARCODE_DB_PATH = os.path.join(VISION2_DATA_DIR, "barcode_db.json")
 VISION2_QRCODE_DB_PATH = os.path.join(VISION2_DATA_DIR, "qrcode_db.json")
 os.makedirs(VISION2_DATA_DIR, exist_ok=True)
 
+# Optional Ollama chat bridge for short-name extraction
+OLLAMA_URL = os.environ.get('OLLAMA_URL', 'http://localhost:11434/api/chat')
+OLLAMA_MODEL = os.environ.get('OLLAMA_MODEL', 'gemma4:31b-cloud')
+
 # Allow skipping heavy model load for quick testing (set SKIP_MODEL_LOAD=1)
 skip_model_load = os.environ.get('SKIP_MODEL_LOAD') == '1'
 
@@ -83,22 +87,43 @@ print("GPU:", torch.cuda.is_available())
 print("HF offline mode:", hf_offline)
 
 # ===== Load Model =====
+
+model_name = "MiaoshouAI/Florence-2-base-PromptGen"
+
+model = AutoModelForCausalLM.from_pretrained(
+    model_name,
+    trust_remote_code=True,
+    local_files_only=hf_offline,   # 這個你原本就有
+    torch_dtype=torch.float16      # 建議放在這邊，而不是 processor 那裡
+).to("cuda")
+
+processor = AutoProcessor.from_pretrained(
+    model_name,
+    trust_remote_code=True,
+    local_files_only=hf_offline,
+    # 這裡不要放 torch_dtype
+    # 如果你真的想調整空白，可以在 decode 時控制
+)
+
+
 if not skip_model_load:
     print("Loading model (one time)...")
     start = time.time()
+    '''
     processor = AutoProcessor.from_pretrained(
-        "microsoft/Florence-2-base",
+        "microsoft/Florence-2-base-PromptGen",
         trust_remote_code=True,
         local_files_only=hf_offline,
         clean_up_tokenization_spaces=True
     )
     model = AutoModelForCausalLM.from_pretrained(
-        "microsoft/Florence-2-base",
+        "microsoft/Florence-2-base-PromptGen",
         trust_remote_code=True,
         local_files_only=hf_offline,
         torch_dtype=torch.float16
     ).to("cuda")
     print(f"Model loaded in {time.time()-start:.2f}s\n")
+    '''
 else:
     print("SKIP_MODEL_LOAD=1 detected; skipping heavy model initialization.")
     processor = None
@@ -1030,7 +1055,7 @@ def _vision2_extract_code_from_upload(image_file, expected_kind=None):
     return code_value, filtered, all_codes
 
 
-def _vision2_model_understanding(image_pil, keyword_tags, enable_model_keyword_check=True, enable_ocr_check=True):
+def _vision2_model_understanding(image_pil, keyword_tags, enable_model_keyword_check=True, enable_ocr_check=True, short_product_name=False):
     """
     Use loaded Florence-2 model to build semantic context (caption + optional OCR)
     and perform keyword matching against model-generated content.
@@ -1062,13 +1087,122 @@ def _vision2_model_understanding(image_pil, keyword_tags, enable_model_keyword_c
     keyword_details = []
 
     try:
-        caption_text = run_model(image_pil.copy(), "<MORE_DETAILED_CAPTION>", max_tokens=180)
+        # Generate caption (or short product name prompt) using the Florence model
+        if short_product_name:
+            prompt = "<MORE_DETAILED_CAPTION>"
+            caption_text = run_model(image_pil.copy(), prompt, max_tokens=28)
+        else:
+            prompt = "<MORE_DETAILED_CAPTION>"
+            caption_text = run_model(image_pil.copy(), prompt, max_tokens=180)
+
+        # Protect against prompt-echo from model; treat as no caption
+        print(f"[Vision2] Model caption output: {caption_text}")
+        if isinstance(caption_text, str):
+            ct_str = caption_text.strip()
+            if not ct_str or ct_str == prompt or ct_str.startswith(prompt):
+                caption_text = None
+
+        product_name = None
+        # Only call Ollama when short product name was requested and we have some caption text
+        if short_product_name and caption_text:
+            try:
+                payload = {
+                    "model": OLLAMA_MODEL,
+                    "messages": [
+                        {"role": "user", "content": f"Extract a concise product/item name from the following description. Return only the name (one short phrase): {caption_text}"}
+                    ],
+                    "temperature": 0
+                }
+                print(f"[Vision2] Calling Ollama: {OLLAMA_URL} model={OLLAMA_MODEL}")
+                # Use streaming request to handle Ollama's line-delimited or chunked JSON
+                resp = requests.post(OLLAMA_URL, json=payload, stream=True, timeout=8)
+                name = None
+                if resp.ok:
+                    # First try: parse as a single JSON blob
+                    try:
+                        j = resp.json()
+                        parsed = True
+                    except ValueError:
+                        parsed = False
+
+                    content_acc = ""
+                    # If single JSON parsed, try extracting usual fields
+                    if parsed and isinstance(j, dict):
+                        choices = j.get('choices')
+                        if choices and isinstance(choices, list):
+                            first = choices[0]
+                            msg = first.get('message') or first.get('content') or first.get('text')
+                            if isinstance(msg, dict):
+                                content = msg.get('content') or msg.get('text')
+                                if isinstance(content, dict):
+                                    name = content.get('text') or content.get('output_text')
+                                elif isinstance(content, str):
+                                    name = content
+                            elif isinstance(msg, str):
+                                name = msg
+                        if not name:
+                            name = j.get('text') or j.get('output') or j.get('result')
+
+                    # If we couldn't parse single JSON, or want to support streaming, iterate lines
+                    if not name:
+                        try:
+                            for line in resp.iter_lines(decode_unicode=True):
+                                if not line:
+                                    continue
+                                line = line.strip()
+                                # Try to parse this line as JSON
+                                try:
+                                    chunk = json.loads(line)
+                                except Exception:
+                                    # treat as raw text
+                                    try:
+                                        content_acc += line
+                                    except Exception:
+                                        pass
+                                    continue
+
+                                # Extract message content from common chunk shapes
+                                piece = ""
+                                if isinstance(chunk, dict):
+                                    # Ollama streaming may include {'message': {'content': '...'}}
+                                    piece = chunk.get('message', {}).get('content') or ""
+                                    if not piece:
+                                        choices = chunk.get('choices')
+                                        if choices and isinstance(choices, list):
+                                            first = choices[0]
+                                            msg = first.get('message') or first.get('content') or first.get('text') or ""
+                                            if isinstance(msg, dict):
+                                                piece = msg.get('content') or msg.get('text') or ""
+                                            elif isinstance(msg, str):
+                                                piece = msg
+                                if piece:
+                                    content_acc += piece
+
+                            if content_acc:
+                                name = content_acc
+                        except Exception as e:
+                            print(f"[Vision2] Ollama streaming parse failed: {e}")
+
+                    if name:
+                        name = str(name).strip().strip(' "\'\n')
+                        if name and name != prompt and not name.startswith(prompt):
+                            product_name = name
+                            caption_text = product_name
+                else:
+                    print(f"[Vision2] Ollama HTTP error: {resp.status_code} {resp.text}")
+            except Exception as ex:
+                print(f"[Vision2] Ollama call failed: {ex}")
     except Exception as e:
         caption_text = f"[caption_error] {e}"
 
     if enable_ocr_check:
         try:
-            ocr_text = run_model(image_pil.copy(), "<OCR_WITH_REGION>", max_tokens=260)
+            ocr_prompt = "<OCR_WITH_REGION>"
+            ocr_text = run_model(image_pil.copy(), ocr_prompt, max_tokens=260)
+            if isinstance(ocr_text, str):
+                ot = ocr_text.strip()
+                if not ot or ot == ocr_prompt or ot.startswith(ocr_prompt):
+                    ocr_text = None
         except Exception as e:
             ocr_text = f"[ocr_error] {e}"
 
@@ -1119,6 +1253,7 @@ def _vision2_model_understanding(image_pil, keyword_tags, enable_model_keyword_c
         "available": True,
         "reason": None,
         "caption": caption_text,
+        "product_name": product_name,
         "ocr": ocr_text,
         "matched_keywords": sorted(list(set(matched_keywords))),
         "keyword_details": keyword_details,
@@ -1197,11 +1332,53 @@ def health():
     return jsonify({
         "status": "ok",
         "gpu": torch.cuda.is_available(),
-        "model": "Florence-2-base"
+        "model": "Florence-2-base-PromptGen"
     })
 
 @app.route("/analyze", methods=["POST"])
 def api_analyze():
+    try:
+        if "image" not in request.files:
+            return jsonify({"error": "No image field"}), 400
+
+        imgfile = request.files["image"]
+        img = Image.open(imgfile.stream).convert("RGB")
+
+        task = request.form.get("task", "caption")
+        engine = request.form.get("engine", "florence")  # florence / gemma
+
+        t0 = time.time()
+
+        if engine == "gemma":
+            if task == "item_name":
+                prompt = "Identify the main item in the image. Return only the item name. No explanation."
+            elif task == "caption":
+                prompt = "Describe this image briefly and clearly."
+            elif task == "json_gauges":
+                prompt = (
+                    "Analyze this industrial instrument image. "
+                    "Extract visible gauge names, values, and units. "
+                    "Return JSON array only. Example: "
+                    "[{\"type\":\"pressure\",\"value\":\"12\",\"unit\":\"bar\"}]"
+                )
+            else:
+                prompt = task
+
+            result = run_ollama_vision(img, prompt, model=OLLAMA_MODEL, timeout=45)
+        else:
+            florence_task = "MORE_DETAILED_CAPTION" if task == "caption" else task
+            result = runmodel(img, florence_task, maxtokens=150)
+
+        return jsonify({
+            "success": True,
+            "engine": engine,
+            "task": task,
+            "result": result,
+            "elapsed": time.time() - t0
+        })
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
     try:
         if 'image' in request.files:
             img_file = request.files['image']
@@ -1289,6 +1466,42 @@ def api_analyze_json_monitor():
             "error": str(e),
             "traceback": traceback.format_exc()
         }), 500
+
+
+@app.route("/readorder", methods=["POST"])
+def api_readorder():
+    """Proxy endpoint for front-end to call Ollama (or configured OLLAMA_URL).
+    Expects the same JSON body the front-end currently sends to the Ollama API
+    (eg. { model, messages, images: [base64], stream:false, options:{...} }).
+    """
+    try:
+        data = None
+        # Accept JSON body
+        if request.is_json:
+            data = request.get_json()
+        else:
+            # Try to parse raw body as json
+            try:
+                data = json.loads(request.get_data(as_text=True) or '{}')
+            except Exception:
+                data = None
+
+        if not data:
+            return jsonify({"error": "No JSON payload provided"}), 400
+
+        # Forward to configured Ollama URL
+        try:
+            resp = requests.post(OLLAMA_URL, json=data, timeout=60)
+            # Try to return Ollama's JSON response directly
+            try:
+                return jsonify(resp.json()), resp.status_code
+            except Exception:
+                return (resp.text, resp.status_code, {"Content-Type": "text/plain"})
+        except requests.RequestException as ex:
+            return jsonify({"error": "Failed to contact OLLAMA endpoint", "detail": str(ex)}), 502
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 def split_ocr_smart(ocr_text):
@@ -2740,11 +2953,13 @@ def vision2_api_analyze():
             performance["barcode_detection_ms"] = 0.0
 
         t_model0 = time.time()
+        short_name_only = str(request.form.get('short_name_only', '0')).strip().lower() in ('1', 'true', 'yes')
         model_understanding = _vision2_model_understanding(
             image_pil,
             keyword_tags,
             enable_model_keyword_check=model_keyword_check,
-            enable_ocr_check=ocr_check
+            enable_ocr_check=ocr_check,
+            short_product_name=short_name_only
         )
         performance["model_understanding_ms"] = round((time.time() - t_model0) * 1000, 2)
 
@@ -2815,6 +3030,38 @@ def vision2_api_analyze():
             "traceback": traceback.format_exc()
         }), 500
 
+def run_ollama_vision(img, prompt, model=None, timeout=30):
+    if model is None:
+        model = OLLAMA_MODEL
+
+    img = img.convert("RGB")
+    buf = BytesIO()
+    img.save(buf, format="JPEG", quality=90)
+    image_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+
+    payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt,
+                "images": [image_b64]
+            }
+        ],
+        "stream": False,
+        "options": {
+            "temperature": 0
+        }
+    }
+
+    resp = requests.post(OLLAMA_URL, json=payload, timeout=timeout)
+    resp.raise_for_status()
+    data = resp.json()
+
+    if "message" in data and isinstance(data["message"], dict):
+        return (data["message"].get("content") or "").strip()
+
+    return (data.get("response") or "").strip()
 
 @app.route("/vision2/api/db/<kind>", methods=["GET", "POST", "DELETE"])
 def vision2_api_db(kind):
